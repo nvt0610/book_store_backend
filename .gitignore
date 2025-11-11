@@ -1,0 +1,70 @@
+# ==========================
+# Node.js / Express backend
+# ==========================
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+.pnpm-store/
+
+# Logs
+logs/
+*.log
+*.tmp
+*.seed
+*.pid
+*.gz
+
+# Coverage / test outputs
+coverage/
+.nyc_output/
+
+# Build / compiled files
+dist/
+build/
+tmp/
+.cache/
+.out/
+
+# Database / ORM (Prisma, SQLite)
+prisma/dev.db
+prisma/*.db-journal
+
+# VSCode / JetBrains IDE
+.vscode/
+.idea/
+*.iml
+
+# OS junk files
+.DS_Store
+Thumbs.db
+
+# Docker / CI artifacts
+docker-compose.override.yml
+docker-data/
+*.bak
+*.swp
+
+# Local scripts or backups
+*.local.js
+*.local.json
+*.bak.js
+*.bak.json
+
+# GitHub workflows cache
+.github/workflows/*.tmp
+
+# Optional - ignore generated exports or test reports
+exports/
+reports/
