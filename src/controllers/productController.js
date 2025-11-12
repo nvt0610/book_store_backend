@@ -4,7 +4,7 @@ import { validate as isUuid } from "uuid";
 
 const R = responseHelper;
 
-const productsController = {
+const productController = {
   async list(req, res) {
     try {
       const result = await productService.list(req.query);
@@ -99,4 +99,4 @@ const productsController = {
   },
 };
 
-export default productsController;
+export default productController;

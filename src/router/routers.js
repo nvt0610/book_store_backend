@@ -10,6 +10,8 @@ import cartItemRoutes from "./cartItemRoutes.js";
 import orderRoutes from "./orderRoutes.js";
 import orderItemRoutes from "./orderItemRoutes.js";
 import paymentRoutes from "./paymentRoutes.js";
+import authRoutes from "./authRoutes.js";
+import uploadRoutes from "./uploadRoutes.js";
 
 /**
  * Main router entry point.
@@ -29,6 +31,8 @@ router.use("/cart-items", cartItemRoutes);
 router.use("/orders", orderRoutes);
 router.use("/order-items", orderItemRoutes);
 router.use("/payments", paymentRoutes);
+router.use("/auth", authRoutes);
+router.use("/upload", uploadRoutes);
 
 // Health check endpoint for quick testing
 router.get("/health", (req, res) => {

@@ -5,97 +5,169 @@ import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildGlobalSearch, buildSelectColumns } = queryHelper;
+const {
+  buildFiltersWhere,
+  mergeWhereParts,
+  buildOrderBy,
+  buildGlobalSearch,
+  buildSelectColumns,
+} = queryHelper;
 
-const T = {
-  entity: "Address",
-  table: "addresses",
-  alias: "a",
-  select: [
-    "id", "user_id", "full_name", "phone",
-    "address_line", "address_line2", "postal_code",
-    "is_default", "created_at", "updated_at"
-  ],
-  allowedFilters: ["user_id", "full_name", "phone", "postal_code", "is_default"],
-  allowedSort: ["created_at", "full_name"],
-  searchColumns: ["full_name", "phone", "address_line", "postal_code"],
-  mutable: ["user_id", "full_name", "phone", "address_line", "address_line2", "postal_code", "is_default"],
-  uniqueTextKeys: [],
-};
-
-function q(col) { return T.alias ? `${T.alias}.${col}` : col; }
-
-const addressesService = {
+/**
+ * Service layer: Addresses CRUD (pure DB logic)
+ */
+const addressService = {
+  /**
+   * List addresses with pagination, filters, and search
+   */
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
-    const search = buildGlobalSearch({ q: queryParams.q, columns: T.searchColumns, alias: T.alias });
+
+    // Allowed filters/sort/search columns
+    const allowedColumns = ["user_id", "full_name", "phone", "postal_code", "is_default"];
+    const searchColumns = ["full_name", "phone", "address_line", "postal_code"];
+
     const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
-    const where = buildFiltersWhere({ filters, allowedColumns: T.allowedFilters, alias: T.alias });
-    const soft = buildSoftDeleteScope(T.alias, queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([soft, search, where]);
-    const orderBy = buildOrderBy({ sortBy: queryParams.sortBy, sortDir: queryParams.sortDir, allowedSort: T.allowedSort, alias: T.alias }) || `ORDER BY ${q("created_at")} DESC`;
-    const selectColumns = buildSelectColumns({ alias: T.alias, columns: T.select, showDeleted: queryParams.showDeleted });
+    const searchText = queryParams.q;
+
+    const search = buildGlobalSearch({
+      q: searchText,
+      columns: searchColumns,
+      alias: "a",
+    });
+
+    const where = buildFiltersWhere({
+      filters,
+      allowedColumns,
+      alias: "a",
+    });
+
+    const softDeleteFilter = buildSoftDeleteScope("a", queryParams.showDeleted || "active");
+    const { whereSql, params } = mergeWhereParts([softDeleteFilter, search, where]);
+
+    const orderBy =
+      buildOrderBy({
+        sortBy: queryParams.sortBy,
+        sortDir: queryParams.sortDir,
+        allowedSort: ["created_at", "full_name"],
+        alias: "a",
+      }) || "ORDER BY a.created_at DESC";
+
+    const selectColumns = buildSelectColumns({
+      alias: "a",
+      columns: [
+        "id",
+        "user_id",
+        "full_name",
+        "phone",
+        "address_line",
+        "address_line2",
+        "postal_code",
+        "is_default",
+        "created_at",
+        "updated_at",
+      ],
+      showDeleted: queryParams.showDeleted,
+    });
+
     const sql = `
       SELECT ${selectColumns}
-      FROM ${T.table} ${T.alias}
+      FROM addresses a
       ${whereSql}
       ${orderBy}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const { rows } = await db.query(sql, [...params, limit, offset]);
-    const countSql = `SELECT COUNT(*) AS total FROM ${T.table} ${T.alias} ${whereSql}`;
+
+    const countSql = `SELECT COUNT(*) AS total FROM addresses a ${whereSql}`;
     const { rows: countRows } = await db.query(countSql, params);
     const total = Number(countRows[0]?.total || 0);
-    return { data: rows, meta: buildPageMeta({ total, page, pageSize }) };
+
+    const meta = buildPageMeta({ total, page, pageSize });
+    return { data: rows, meta };
   },
 
+  /**
+   * Get single address by ID
+   */
   async getById(id, showDeleted = "active") {
-    const soft = buildSoftDeleteScope(T.alias, showDeleted);
-    const cols = buildSelectColumns({ alias: T.alias, columns: T.select, showDeleted });
+    const softDeleteFilter = buildSoftDeleteScope("", showDeleted);
     const sql = `
-      SELECT ${cols}
-      FROM ${T.table} ${T.alias}
-      WHERE ${q("id")} = $1 ${soft.sql ? `AND ${soft.sql}` : ""}
+      SELECT
+        id, user_id, full_name, phone, address_line, address_line2,
+        postal_code, is_default, created_at, updated_at, deleted_at
+      FROM addresses
+      WHERE id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
     `;
     const { rows } = await db.query(sql, [id]);
     return rows[0] || null;
   },
 
+  /**
+   * Create new address
+   */
   async create(data) {
     const id = uuidv4();
-    const cols = [], vals = [], params = [id];
-    for (const col of T.mutable) {
-      if (data[col] !== undefined) { cols.push(col); params.push(data[col]); vals.push(`$${params.length}`); }
-    }
     const sql = `
-      INSERT INTO ${T.table} (id${cols.length ? "," : ""}${cols.join(", ")})
-      VALUES ($1${vals.length ? "," : ""}${vals.join(", ")})
-      RETURNING ${T.select.join(", ")}
+      INSERT INTO addresses (
+        id, user_id, full_name, phone, address_line,
+        address_line2, postal_code, is_default
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING id, user_id, full_name, phone, address_line,
+                address_line2, postal_code, is_default, created_at
     `;
-    const { rows } = await db.query(sql, params);
+    const { rows } = await db.query(sql, [
+      id,
+      data.user_id,
+      data.full_name,
+      data.phone,
+      data.address_line,
+      data.address_line2,
+      data.postal_code,
+      data.is_default ?? false,
+    ]);
     return rows[0];
   },
 
+  /**
+   * Update address
+   */
   async update(id, data) {
-    const sets = [], params = [];
-    for (const col of T.mutable) {
-      if (data[col] !== undefined) { params.push(data[col]); sets.push(`${col} = $${params.length}`); }
-    }
-    if (sets.length === 0) return this.getById(id);
-    sets.push(`updated_at = now()`);
     const sql = `
-      UPDATE ${T.table}
-      SET ${sets.join(", ")}
-      WHERE id = $${params.length + 1} AND deleted_at IS NULL
-      RETURNING ${T.select.join(", ")}
+      UPDATE addresses
+      SET
+        user_id = COALESCE($2, user_id),
+        full_name = COALESCE($3, full_name),
+        phone = COALESCE($4, phone),
+        address_line = COALESCE($5, address_line),
+        address_line2 = COALESCE($6, address_line2),
+        postal_code = COALESCE($7, postal_code),
+        is_default = COALESCE($8, is_default),
+        updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, user_id, full_name, phone, address_line,
+                address_line2, postal_code, is_default, updated_at
     `;
-    const { rows } = await db.query(sql, [...params, id]);
+    const { rows } = await db.query(sql, [
+      id,
+      data.user_id,
+      data.full_name,
+      data.phone,
+      data.address_line,
+      data.address_line2,
+      data.postal_code,
+      data.is_default,
+    ]);
     return rows[0] || null;
   },
 
+  /**
+   * Soft delete address
+   */
   async remove(id) {
     const sql = `
-      UPDATE ${T.table}
+      UPDATE addresses
       SET deleted_at = now(), updated_at = now()
       WHERE id = $1 AND deleted_at IS NULL
     `;
@@ -104,4 +176,4 @@ const addressesService = {
   },
 };
 
-export default addressesService;
+export default addressService;

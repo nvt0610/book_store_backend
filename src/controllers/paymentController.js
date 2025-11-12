@@ -2,19 +2,88 @@ import paymentService from "../services/paymentService.js";
 import responseHelper from "../helpers/responseHelper.js";
 import { validate as isUuid } from "uuid";
 
-const R=responseHelper;
-const paymentsController={
-  async list(req,res){try{return R.ok(res,await paymentService.list(req.query));}catch(e){return R.internalError(res,e.message);}},
-  async getById(req,res){const{id}=req.params;if(!isUuid(id))return R.badRequest(res,"Invalid UUID");const row=await paymentService.getById(id,req.query.showDeleted);return row?R.ok(res,row):R.notFound(res,"Payment not found");},
-  async create(req,res){try{
-    const{order_id,payment_method,amount}=req.body;
-    if(!isUuid(order_id))return R.badRequest(res,"Invalid order_id");
-    if(!payment_method)return R.badRequest(res,"Missing payment_method");
-    if(amount==null||Number(amount)<=0)return R.badRequest(res,"Invalid amount");
-    const created=await paymentService.create(req.body);
-    return R.created(res,created,"Payment created");
-  }catch(e){return R.badRequest(res,e.message);}},
-  async update(req,res){const{id}=req.params;if(!isUuid(id))return R.badRequest(res,"Invalid UUID");const updated=await paymentService.update(id,req.body);return updated?R.ok(res,updated):R.notFound(res,"Payment not found");},
-  async remove(req,res){const{id}=req.params;if(!isUuid(id))return R.badRequest(res,"Invalid UUID");const ok=await paymentService.remove(id);return ok?R.ok(res,{deleted:true},"Payment soft deleted (status=INACTIVE)"):R.notFound(res,"Payment not found");}
+const R = responseHelper;
+
+/**
+ * Controller layer: Payments CRUD and lifecycle management
+ */
+const paymentController = {
+  /** List all payments */
+  async list(req, res) {
+    try {
+      const result = await paymentService.listPayments(req.query);
+      return R.ok(res, result, "Fetched payments successfully");
+    } catch (err) {
+      console.error("[paymentController.list] error:", err);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  /** Get payment by id */
+  async getById(req, res) {
+    try {
+      const { id } = req.params;
+      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID format");
+      const payment = await paymentService.getPaymentById(id, req.query.showDeleted);
+      if (!payment) return R.notFound(res, "Payment not found");
+      return R.ok(res, payment, "Fetched payment successfully");
+    } catch (err) {
+      console.error("[paymentController.getById] error:", err);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  /** Create a new payment (normally used for admin testing or manual payment entry) */
+  async create(req, res) {
+    try {
+      const { orderId, paymentMethod, amount } = req.body || {};
+      if (!isUuid(orderId)) return R.badRequest(res, "Invalid orderId");
+      if (typeof amount !== "number" || amount <= 0)
+        return R.badRequest(res, "Invalid amount");
+
+      const payment = await paymentService.createPayment({
+        orderId,
+        paymentMethod,
+        amount,
+      });
+      return R.created(res, payment, "Payment created successfully");
+    } catch (err) {
+      console.error("[paymentController.create] error:", err);
+      if (err.status) return R.error(res, err.status, err.message);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  /** Update payment status or info */
+  async update(req, res) {
+    try {
+      const { id } = req.params;
+      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID format");
+
+      const updated = await paymentService.updatePayment(id, req.body || {});
+      if (!updated) return R.notFound(res, "Payment not found");
+      return R.ok(res, updated, "Payment updated successfully");
+    } catch (err) {
+      console.error("[paymentController.update] error:", err);
+      if (err.status) return R.error(res, err.status, err.message);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  /** Soft delete payment */
+  async remove(req, res) {
+    try {
+      const { id } = req.params;
+      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID format");
+
+      const deleted = await paymentService.deletePayment(id);
+      if (!deleted) return R.notFound(res, "Payment not found or already deleted");
+      return R.ok(res, { deleted: true }, "Payment soft deleted successfully");
+    } catch (err) {
+      console.error("[paymentController.remove] error:", err);
+      return R.internalError(res, err.message);
+    }
+  },
 };
-export default paymentsController;
+
+export default paymentController;

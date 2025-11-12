@@ -1,5 +1,6 @@
 import pg from "pg";
 import dotenv from "dotenv";
+import { getRequestContext } from "../middlewares/requestContext.js";
 
 dotenv.config();
 
@@ -13,17 +14,32 @@ const pool = new Pool({
   database: process.env.DB_NAME,
 });
 
-// Hàm tiện dụng dùng cho mọi nơi trong project
+/**
+ * Core db utility for the whole project.
+ * Supports single query, transaction, and request-scoped logging.
+ */
 const db = {
+  /**
+   * Execute a single query (default usage)
+   */
   async query(text, params = []) {
     const start = Date.now();
+    const ctx = getRequestContext();
+    const userId = ctx.userId || null;
+
     const result = await pool.query(text, params);
     const duration = Date.now() - start;
-    console.log(`⏱️ Executed query: ${text.split(" ")[0]} (${duration}ms)`);
+
+    if (process.env.LOG_LEVEL === "debug") {
+      console.log(`[SQL][${duration}ms][user=${userId || "anon"}] ${text}`);
+    }
+
     return result;
   },
 
-  // Tùy chọn: hỗ trợ transaction
+  /**
+   * Run a function within a transaction
+   */
   async transaction(callback) {
     const client = await pool.connect();
     try {
@@ -37,6 +53,26 @@ const db = {
     } finally {
       client.release();
     }
+  },
+
+  /**
+   * Get a dedicated client for manual transaction control
+   */
+  async getClient() {
+    const client = await pool.connect();
+    return {
+      query: (text, params) => client.query(text, params),
+      release: () => client.release(),
+      async begin() {
+        await client.query("BEGIN");
+      },
+      async commit() {
+        await client.query("COMMIT");
+      },
+      async rollback() {
+        await client.query("ROLLBACK");
+      },
+    };
   },
 };
 

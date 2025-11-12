@@ -53,7 +53,7 @@ async function assertUniqueTextOnUpdate(id, data) {
   }
 }
 
-const productsService = {
+const productService = {
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
 
@@ -172,4 +172,4 @@ const productsService = {
   },
 };
 
-export default productsService;
+export default productService;

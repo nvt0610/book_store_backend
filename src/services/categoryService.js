@@ -5,150 +5,225 @@ import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildGlobalSearch, buildSelectColumns } = queryHelper;
+const {
+  buildFiltersWhere,
+  mergeWhereParts,
+  buildOrderBy,
+  buildGlobalSearch,
+  buildSelectColumns,
+} = queryHelper;
 
-const T = {
-  entity: "Category",
-  table: "categories",
-  alias: "c",
-  select: ["id", "name", "description", "created_at", "updated_at"],
-  allowedFilters: ["name", "created_at"],
-  allowedSort: ["name", "created_at"],
-  searchColumns: ["name", "description"],
-  mutable: ["name", "description"],
-  uniqueTextKeys: ["name"],
-};
-
-function q(col) { return T.alias ? `${T.alias}.${col}` : col; }
-
-async function assertUniqueTextOnCreate(data) {
-  for (const key of T.uniqueTextKeys) {
-    if (data[key] == null) continue;
-    const sql = `SELECT 1 FROM ${T.table} WHERE LOWER(${key}) = LOWER($1) AND deleted_at IS NULL`;
-    const { rowCount } = await db.query(sql, [String(data[key])]);
-    if (rowCount > 0) { const e = new Error(`${T.entity} ${key} already exists`); e.status = 409; throw e; }
-  }
-}
-
-async function assertUniqueTextOnUpdate(id, data) {
-  for (const key of T.uniqueTextKeys) {
-    if (data[key] == null) continue;
-    const sql = `SELECT 1 FROM ${T.table} WHERE LOWER(${key}) = LOWER($1) AND id <> $2 AND deleted_at IS NULL`;
-    const { rowCount } = await db.query(sql, [String(data[key]), id]);
-    if (rowCount > 0) { const e = new Error(`${T.entity} ${key} already exists`); e.status = 409; throw e; }
-  }
-}
-
-const categoriesService = {
+/**
+ * Service layer: Categories CRUD + Product relationship
+ */
+const categoryService = {
+  /**
+   * List categories + product count
+   */
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
 
-    const search = buildGlobalSearch({ q: queryParams.q, columns: T.searchColumns, alias: T.alias });
+    const allowedFilters = ["name", "created_at"];
+    const allowedSort = ["name", "created_at"];
+    const searchColumns = ["name", "description"];
+
+    const search = buildGlobalSearch({
+      q: queryParams.q,
+      columns: searchColumns,
+      alias: "c",
+    });
+
     const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
-    const where = buildFiltersWhere({ filters, allowedColumns: T.allowedFilters, alias: T.alias });
+    const where = buildFiltersWhere({
+      filters,
+      allowedColumns: allowedFilters,
+      alias: "c",
+    });
 
-    // categories KHÔNG có cột status → tránh "inactive"
-    let mode = String(queryParams.showDeleted || "active").toLowerCase();
-    if (mode === "inactive") mode = "active";
-    const softDeleteFilter = buildSoftDeleteScope(T.alias, mode);
-
-    const { whereSql, params } = mergeWhereParts([softDeleteFilter, search, where]);
+    const soft = buildSoftDeleteScope("c", queryParams.showDeleted || "active");
+    const { whereSql, params } = mergeWhereParts([soft, search, where]);
 
     const orderBy =
-      buildOrderBy({ sortBy: queryParams.sortBy, sortDir: queryParams.sortDir, allowedSort: T.allowedSort, alias: T.alias }) ||
-      `ORDER BY ${q("created_at")} DESC`;
+      buildOrderBy({
+        sortBy: queryParams.sortBy,
+        sortDir: queryParams.sortDir,
+        allowedSort,
+        alias: "c",
+      }) || "ORDER BY c.created_at DESC";
 
-    const selectColumns = buildSelectColumns({ alias: T.alias, columns: T.select, showDeleted: mode });
+    const selectColumns = `
+      c.id, c.name, c.description, c.created_at, c.updated_at,
+      COUNT(p.id) AS product_count
+    `;
 
     const sql = `
       SELECT ${selectColumns}
-      FROM ${T.table} ${T.alias}
+      FROM categories c
+      LEFT JOIN products p ON p.category_id = c.id AND p.deleted_at IS NULL
       ${whereSql}
+      GROUP BY c.id
       ${orderBy}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
+
     const { rows } = await db.query(sql, [...params, limit, offset]);
 
-    const countSql = `SELECT COUNT(*) AS total FROM ${T.table} ${T.alias} ${whereSql}`;
+    const countSql = `SELECT COUNT(*) AS total FROM categories c ${whereSql}`;
     const { rows: countRows } = await db.query(countSql, params);
     const total = Number(countRows[0]?.total || 0);
 
-    const meta = buildPageMeta({ total, page, pageSize });
-    return { data: rows, meta };
+    return { data: rows, meta: buildPageMeta({ total, page, pageSize }) };
   },
 
+  /**
+   * Get category by ID + products list
+   */
   async getById(id, showDeleted = "active") {
-    let mode = String(showDeleted || "active").toLowerCase();
-    if (mode === "inactive") mode = "active";
-    const soft = buildSoftDeleteScope(T.alias, mode);
-    const cols = buildSelectColumns({ alias: T.alias, columns: T.select, showDeleted: mode });
-    const sql = `
-      SELECT ${cols}
-      FROM ${T.table} ${T.alias}
-      WHERE ${q("id")} = $1 ${soft.sql ? `AND ${soft.sql}` : ""}
+    const soft = buildSoftDeleteScope("", showDeleted);
+
+    const categorySql = `
+      SELECT id, name, description, created_at, updated_at, deleted_at
+      FROM categories
+      WHERE id = $1 ${soft.sql ? `AND ${soft.sql}` : ""}
     `;
-    const { rows } = await db.query(sql, [id]);
-    return rows[0] || null;
+    const { rows } = await db.query(categorySql, [id]);
+    const category = rows[0];
+    if (!category) return null;
+
+    // Fetch products in this category
+    const productSql = `
+      SELECT id, name, price, stock, created_at, updated_at
+      FROM products
+      WHERE category_id = $1 AND deleted_at IS NULL
+      ORDER BY created_at DESC
+    `;
+    const { rows: products } = await db.query(productSql, [id]);
+    category.products = products;
+    category.product_count = products.length;
+
+    return category;
   },
 
+  /**
+   * Create new category
+   */
   async create(data) {
-    await assertUniqueTextOnCreate(data);
-    const id = uuidv4();
-
-    const cols = [];
-    const vals = [];
-    const params = [id];
-
-    for (const col of T.mutable) {
-      if (Object.prototype.hasOwnProperty.call(data, col)) {
-        cols.push(col);
-        params.push(data[col]);
-        vals.push(`$${params.length}`);
-      }
+    // Check name uniqueness
+    const dup = await db.query(
+      "SELECT 1 FROM categories WHERE LOWER(name) = LOWER($1) AND deleted_at IS NULL",
+      [data.name]
+    );
+    if (dup.rowCount > 0) {
+      const err = new Error("Category name already exists");
+      err.status = 409;
+      throw err;
     }
 
+    const id = uuidv4();
     const sql = `
-      INSERT INTO ${T.table} (id${cols.length ? "," : ""} ${cols.join(", ")})
-      VALUES ($1${vals.length ? "," : ""} ${vals.join(", ")})
-      RETURNING ${T.select.join(", ")}
+      INSERT INTO categories (id, name, description)
+      VALUES ($1, $2, $3)
+      RETURNING id, name, description, created_at
     `;
-    const { rows } = await db.query(sql, params);
+    const { rows } = await db.query(sql, [id, data.name, data.description]);
     return rows[0];
   },
 
+  /**
+   * Update category info (PATCH)
+   */
   async update(id, data) {
-    await assertUniqueTextOnUpdate(id, data);
-
-    const sets = [];
-    const params = [];
-    for (const col of T.mutable) {
-      if (Object.prototype.hasOwnProperty.call(data, col)) {
-        params.push(data[col]);
-        sets.push(`${col} = $${params.length}`);
+    // check duplicate name if provided
+    if (data.name) {
+      const dup = await db.query(
+        "SELECT 1 FROM categories WHERE LOWER(name) = LOWER($1) AND id <> $2 AND deleted_at IS NULL",
+        [data.name, id]
+      );
+      if (dup.rowCount > 0) {
+        const err = new Error("Category name already exists");
+        err.status = 409;
+        throw err;
       }
     }
-    if (sets.length === 0) return this.getById(id);
 
-    sets.push(`updated_at = now()`);
     const sql = `
-      UPDATE ${T.table}
-      SET ${sets.join(", ")}
-      WHERE id = $${params.length + 1} AND deleted_at IS NULL
-      RETURNING ${T.select.join(", ")}
+      UPDATE categories
+      SET
+        name = COALESCE($2, name),
+        description = COALESCE($3, description),
+        updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, name, description, updated_at
     `;
-    const { rows } = await db.query(sql, [...params, id]);
+    const { rows } = await db.query(sql, [id, data.name, data.description]);
     return rows[0] || null;
   },
 
+  /**
+   * Soft delete category
+   */
   async remove(id) {
     const sql = `
-      UPDATE ${T.table}
+      UPDATE categories
       SET deleted_at = now(), updated_at = now()
       WHERE id = $1 AND deleted_at IS NULL
     `;
     const { rowCount } = await db.query(sql, [id]);
     return rowCount > 0;
   },
+
+  /**
+ * Attach products to a category.
+ * In one-to-many model, each product belongs to exactly one category.
+ * If a product is already in another category, it will be reassigned.
+ * Products already in this category are ignored.
+ */
+  async addProducts(categoryId, productIds = []) {
+    if (!Array.isArray(productIds) || productIds.length === 0) return [];
+
+    // Skip products that already belong to the same category
+    const checkSql = `
+      SELECT id FROM products
+      WHERE id = ANY($1::uuid[])
+        AND category_id = $2
+        AND deleted_at IS NULL
+    `;
+    const { rows: existing } = await db.query(checkSql, [productIds, categoryId]);
+    const existingIds = existing.map((r) => r.id);
+    const filteredIds = productIds.filter((id) => !existingIds.includes(id));
+
+    if (filteredIds.length === 0) return [];
+
+    // Update category_id for remaining products
+    const sql = `
+      UPDATE products
+      SET category_id = $1, updated_at = now()
+      WHERE id = ANY($2::uuid[])
+        AND deleted_at IS NULL
+      RETURNING id, name, category_id
+    `;
+    const { rows } = await db.query(sql, [categoryId, filteredIds]);
+    return rows;
+  },
+
+  /**
+   * Detach one or multiple products from a category.
+   * Accepts a single UUID or an array of UUIDs in the request body.
+   */
+  async removeProducts(categoryId, productIds = []) {
+    if (!Array.isArray(productIds)) productIds = [productIds];
+    if (productIds.length === 0) return 0;
+
+    const sql = `
+      UPDATE products
+      SET category_id = NULL, updated_at = now()
+      WHERE category_id = $1
+        AND id = ANY($2::uuid[])
+        AND deleted_at IS NULL
+    `;
+    const { rowCount } = await db.query(sql, [categoryId, productIds]);
+    return rowCount;
+  },
 };
 
-export default categoriesService;
+export default categoryService;

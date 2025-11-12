@@ -24,9 +24,9 @@ END $$;
 CREATE TYPE user_role      AS ENUM ('GUEST', 'CUSTOMER', 'ADMIN');
 CREATE TYPE user_status    AS ENUM ('ACTIVE', 'INACTIVE');
 CREATE TYPE product_status AS ENUM ('ACTIVE', 'INACTIVE');
-CREATE TYPE order_status   AS ENUM ('PENDING', 'PAID', 'SHIPPED', 'CANCELLED', 'INACTIVE');
+CREATE TYPE order_status   AS ENUM ('PENDING', 'COMPLETED', 'INACTIVE');
 CREATE TYPE cart_status    AS ENUM ('ACTIVE', 'CHECKED_OUT', 'INACTIVE');
-CREATE TYPE payment_status AS ENUM ('PENDING', 'COMPLETED', 'FAILED', 'INACTIVE');
+CREATE TYPE payment_status AS ENUM ('PENDING', 'COMPLETED', 'INACTIVE');
 CREATE TYPE payment_method AS ENUM ('COD', 'CREDIT_CARD', 'VNPAY', 'MOMO');
 
 -- ======================
@@ -126,7 +126,7 @@ CREATE TABLE products (
   main_image   VARCHAR(255),
   extra_images TEXT[],
 
-  category_id  UUID NOT NULL REFERENCES categories(id),
+  category_id UUID REFERENCES categories(id),
   publisher_id UUID NOT NULL REFERENCES publishers(id),
   author_id    UUID NOT NULL REFERENCES authors(id),
 

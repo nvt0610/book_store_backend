@@ -76,6 +76,10 @@ export const responseHelper = {
     return send(res, 503, false, message, data);
   },
 
+  error(res, status = 500, message = "Internal Server Error", data = null) {
+    return send(res, status, false, message, data);
+  },
+
   handleError(res, error, fallbackMessage = "Internal Server Error") {
     console.error("[responseHelper] Error:", error);
 

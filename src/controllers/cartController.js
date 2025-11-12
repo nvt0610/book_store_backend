@@ -15,6 +15,12 @@ const cartController = {
     const row = await cartService.getById(id, req.query.showDeleted);
     return row ? R.ok(res, row) : R.notFound(res, "Cart not found");
   },
+  async getByUserId(req, res) {
+    const { id } = req.params;
+    if (!isUuid(id)) return R.badRequest(res, "Invalid UUID");
+    const row = await cartService.getByUserId(id, req.query.showDeleted);
+    return row ? R.ok(res, row) : R.notFound(res, "User not found");
+  },
   async create(req, res) {
     try {
       const { user_id } = req.body;

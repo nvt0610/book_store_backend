@@ -4,17 +4,23 @@ import { validate as isUuid } from "uuid";
 
 const R = responseHelper;
 
-const categoriesController = {
+const categoryController = {
+  /**
+   * GET /api/categories
+   */
   async list(req, res) {
     try {
       const result = await categoryService.list(req.query);
       return R.ok(res, result, "Fetched categories successfully");
     } catch (err) {
-      console.error("[categoriesController.list] error:", err);
+      console.error("[categoryController.list] error:", err);
       return R.internalError(res, err.message);
     }
   },
 
+  /**
+   * GET /api/categories/:id
+   */
   async getById(req, res) {
     try {
       const { id } = req.params;
@@ -23,11 +29,14 @@ const categoriesController = {
       if (!row) return R.notFound(res, "Category not found");
       return R.ok(res, row, "Fetched category successfully");
     } catch (err) {
-      console.error("[categoriesController.getById] error:", err);
+      console.error("[categoryController.getById] error:", err);
       return R.internalError(res, err.message);
     }
   },
 
+  /**
+   * POST /api/categories
+   */
   async create(req, res) {
     try {
       const { name } = req.body;
@@ -35,12 +44,15 @@ const categoriesController = {
       const created = await categoryService.create(req.body);
       return R.created(res, created, "Category created successfully");
     } catch (err) {
-      console.error("[categoriesController.create] error:", err);
+      console.error("[categoryController.create] error:", err);
       if (err.status === 409) return R.conflict(res, err.message);
       return R.badRequest(res, err.message);
     }
   },
 
+  /**
+   * PATCH /api/categories/:id
+   */
   async update(req, res) {
     try {
       const { id } = req.params;
@@ -49,12 +61,15 @@ const categoriesController = {
       if (!updated) return R.notFound(res, "Category not found");
       return R.ok(res, updated, "Category updated successfully");
     } catch (err) {
-      console.error("[categoriesController.update] error:", err);
+      console.error("[categoryController.update] error:", err);
       if (err.status === 409) return R.conflict(res, err.message);
       return R.badRequest(res, err.message);
     }
   },
 
+  /**
+   * DELETE /api/categories/:id
+   */
   async remove(req, res) {
     try {
       const { id } = req.params;
@@ -63,10 +78,54 @@ const categoriesController = {
       if (!deleted) return R.notFound(res, "Category not found or already deleted");
       return R.ok(res, { deleted: true }, "Category soft deleted successfully");
     } catch (err) {
-      console.error("[categoriesController.remove] error:", err);
+      console.error("[categoryController.remove] error:", err);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  /**
+ * POST /api/categories/:id/products
+ * Attach (move) products to a category.
+ */
+  async addProducts(req, res) {
+    try {
+      const { id } = req.params;
+      const { productIds } = req.body;
+      if (!isUuid(id)) return R.badRequest(res, "Invalid category UUID");
+      if (!Array.isArray(productIds) || productIds.length === 0)
+        return R.badRequest(res, "Missing or invalid productIds array");
+
+      const updated = await categoryService.addProducts(id, productIds);
+      return R.ok(res, { updatedCount: updated.length }, "Products attached successfully");
+    } catch (err) {
+      console.error("[categoryController.addProducts] error:", err);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  /**
+   * DELETE /api/categories/:id/products
+   * Detach one or multiple products from a category.
+   * Accepts a single productId or an array in the request body.
+   */
+  async removeProducts(req, res) {
+    try {
+      const { id } = req.params;
+      const { productIds } = req.body;
+      if (!isUuid(id)) return R.badRequest(res, "Invalid category UUID");
+      if (!productIds)
+        return R.badRequest(res, "Missing productIds field in body");
+
+      const removedCount = await categoryService.removeProducts(id, productIds);
+      if (removedCount === 0)
+        return R.notFound(res, "No products found or already detached");
+
+      return R.ok(res, { removedCount }, "Products detached successfully");
+    } catch (err) {
+      console.error("[categoryController.removeProducts] error:", err);
       return R.internalError(res, err.message);
     }
   },
 };
 
-export default categoriesController;
+export default categoryController;
