@@ -1,22 +1,38 @@
+// src/routes/orderRoutes.js
+
 import express from "express";
 import orderController from "../controllers/orderController.js";
+import { requireAuth } from "../middlewares/requireAuth.js";
+import { requireRole } from "../middlewares/requireRole.js";
+import { requireOwnerOrAdmin } from "../middlewares/requireOwnerOrAdmin.js";
 
 const router = express.Router();
 
 /**
- * Base route: /api/orders
+ * CUSTOMER + ADMIN
  */
+// CUSTOMER + ADMIN
+router.use(requireAuth);
+
+// Customer checkout
+router.post("/from-cart", orderController.createFromCart);
+router.post("/buy-now", orderController.buyNow);
+
+// List (admin: all, customer: own)
 router.get("/", orderController.list);
-router.get("/:id", orderController.getById);
-router.get("/:id/items", orderController.listItems);
 
-// Create orders
-router.post("/", orderController.createManual);          // Manual (admin)
-router.post("/from-cart", orderController.createFromCart); // From cart
-router.post("/buy-now", orderController.buyNow);         // Instant / Buy now
+// Get order detail
+router.get("/:id", requireOwnerOrAdmin("orders"), orderController.getById);
 
-// Update / Delete
-router.patch("/:id", orderController.update);
-router.delete("/:id", orderController.remove);
+// Get items
+router.get("/:id/items", requireOwnerOrAdmin("orders"), orderController.listItems);
+
+// Cancel
+router.patch("/:id/cancel", requireOwnerOrAdmin("orders"), orderController.cancel);
+
+// ADMIN ONLY
+router.post("/", requireRole("ADMIN"), orderController.createManual);
+router.patch("/:id", requireRole("ADMIN"), orderController.update);
+router.delete("/:id", requireRole("ADMIN"), orderController.remove);
 
 export default router;

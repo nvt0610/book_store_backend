@@ -90,12 +90,12 @@ const categoryController = {
   async addProducts(req, res) {
     try {
       const { id } = req.params;
-      const { productIds } = req.body;
+      const { product_ids } = req.body;
       if (!isUuid(id)) return R.badRequest(res, "Invalid category UUID");
-      if (!Array.isArray(productIds) || productIds.length === 0)
-        return R.badRequest(res, "Missing or invalid productIds array");
+      if (!Array.isArray(product_ids) || product_ids.length === 0)
+        return R.badRequest(res, "Missing or invalid product_ids array");
 
-      const updated = await categoryService.addProducts(id, productIds);
+      const updated = await categoryService.addProducts(id, product_ids);
       return R.ok(res, { updatedCount: updated.length }, "Products attached successfully");
     } catch (err) {
       console.error("[categoryController.addProducts] error:", err);
@@ -106,17 +106,17 @@ const categoryController = {
   /**
    * DELETE /api/categories/:id/products
    * Detach one or multiple products from a category.
-   * Accepts a single productId or an array in the request body.
+   * Accepts a single product_id or an array in the request body.
    */
   async removeProducts(req, res) {
     try {
       const { id } = req.params;
-      const { productIds } = req.body;
+      const { product_ids } = req.body;
       if (!isUuid(id)) return R.badRequest(res, "Invalid category UUID");
-      if (!productIds)
-        return R.badRequest(res, "Missing productIds field in body");
+      if (!product_ids)
+        return R.badRequest(res, "Missing product_ids field in body");
 
-      const removedCount = await categoryService.removeProducts(id, productIds);
+      const removedCount = await categoryService.removeProducts(id, product_ids);
       if (removedCount === 0)
         return R.notFound(res, "No products found or already detached");
 

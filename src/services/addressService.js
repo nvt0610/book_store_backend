@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import paginationHelper from "../helpers/paginationHelper.js";
 import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
+import { getRequestContext } from "../middlewares/requestContext.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
 const {
@@ -29,6 +30,17 @@ const addressService = {
 
     const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
     const searchText = queryParams.q;
+
+    const { user_id, role } = getRequestContext();
+
+    // Inject auto user_id filter for CUSTOMER
+    if (role !== "ADMIN") {
+      filters.push({
+        field: "user_id",
+        op: "eq",
+        value: user_id,
+      });
+    }
 
     const search = buildGlobalSearch({
       q: searchText,

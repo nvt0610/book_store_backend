@@ -173,12 +173,21 @@ CREATE TABLE addresses (
 -- ======================
 CREATE TABLE carts (
   id UUID PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id),
+
+  -- If user is logged in -> user_id IS NOT NULL, guest_token IS NULL
+  -- If guest -> user_id IS NULL, guest_token IS NOT NULL
+  user_id UUID REFERENCES users(id),
+  guest_token TEXT,
+
   status  cart_status NOT NULL DEFAULT 'ACTIVE',
 
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ,
-  deleted_at TIMESTAMPTZ
+  deleted_at TIMESTAMPTZ,
+
+  -- Optional safety: a cart must belong to either a user OR a guest token
+  CONSTRAINT ck_carts_owner_not_empty
+    CHECK (user_id IS NOT NULL OR guest_token IS NOT NULL)
 );
 
 CREATE TABLE cart_items (
@@ -189,7 +198,6 @@ CREATE TABLE cart_items (
 
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ,
-  deleted_at TIMESTAMPTZ,
 
   CONSTRAINT ck_cart_items_qty_pos CHECK (quantity > 0)
 );
@@ -208,6 +216,7 @@ CREATE TABLE orders (
   -- mốc thời gian tối thiểu cho báo cáo
   placed_at TIMESTAMPTZ,
   paid_at   TIMESTAMPTZ,
+  cancel_reason TEXT,
 
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ,
@@ -341,3 +350,16 @@ CREATE UNIQUE INDEX ux_cart_items_unique
 CREATE UNIQUE INDEX ux_order_items_unique
   ON order_items(order_id, product_id)
   WHERE deleted_at IS NULL;
+
+-- Unique active guest cart per guest_token
+CREATE UNIQUE INDEX ux_carts_guest_active
+  ON carts(guest_token)
+  WHERE deleted_at IS NULL
+    AND status = 'ACTIVE'
+    AND guest_token IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_cart_items_cart_id
+ON cart_items(cart_id);
+
+CREATE INDEX IF NOT EXISTS idx_cart_items_product_id
+ON cart_items(product_id);

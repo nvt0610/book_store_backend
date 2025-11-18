@@ -35,10 +35,10 @@ const authController = {
     /** GET /api/auth/me */
     async getMe(req, res) {
         try {
-            const userId = req.user?.id;
-            if (!userId) return R.unauthorized(res, "Missing token context");
+            const user_id = req.user?.id;
+            if (!user_id) return R.unauthorized(res, "Missing token context");
 
-            const me = await authService.getMe(userId);
+            const me = await authService.getMe(user_id);
             if (!me) return R.notFound(res, "User not found");
             return R.ok(res, me, "Fetched current user");
         } catch (err) {
@@ -50,10 +50,10 @@ const authController = {
     /** PUT /api/auth/me */
     async updateProfile(req, res) {
         try {
-            const userId = req.user?.id;
-            if (!userId) return R.unauthorized(res, "Missing token context");
+            const user_id = req.user?.id;
+            if (!user_id) return R.unauthorized(res, "Missing token context");
 
-            const updated = await authService.updateProfile(userId, req.body);
+            const updated = await authService.updateProfile(user_id, req.body);
             return R.ok(res, updated, "Profile updated successfully");
         } catch (err) {
             console.error("[authController.updateProfile]", err);
@@ -64,11 +64,11 @@ const authController = {
     /** POST /api/auth/logout */
     async logout(req, res) {
         try {
-            const userId = req.user?.id;
+            const user_id = req.user?.id;
             const { refreshToken } = req.body;
-            if (!userId || !refreshToken) return R.badRequest(res, "Missing refreshToken");
+            if (!user_id || !refreshToken) return R.badRequest(res, "Missing refreshToken");
 
-            const ok = await authService.logout(userId, refreshToken);
+            const ok = await authService.logout(user_id, refreshToken);
             if (!ok) return R.badRequest(res, "Session not found");
             return R.ok(res, { loggedOut: true }, "Logout successful");
         } catch (err) {

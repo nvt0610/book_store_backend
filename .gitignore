@@ -68,3 +68,7 @@ docker-data/
 # Optional - ignore generated exports or test reports
 exports/
 reports/
+
+# Postman collections and config
+.postman/
+postman/

@@ -2,7 +2,6 @@ import db from "../db/db.js";
 import { v4 as uuidv4 } from "uuid";
 import paginationHelper from "../helpers/paginationHelper.js";
 import queryHelper from "../helpers/queryHelper.js";
-import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
 const {
@@ -13,11 +12,14 @@ const {
 } = queryHelper;
 
 /**
- * Service layer: Cart Items CRUD (pure DB logic)
+ * Service layer: Cart Item CRUD + business rules
+ * Pure DB + business logic (NO owner/role logic here)
  */
 const cartItemService = {
+
   /**
-   * List cart items with pagination, filters, and soft delete handling
+   * List cart items (admin use)
+   * Note: Hard delete → no deleted_at filter anymore
    */
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
@@ -31,8 +33,7 @@ const cartItemService = {
       alias: "ci",
     });
 
-    const softDeleteFilter = buildSoftDeleteScope("ci", queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([softDeleteFilter, where]);
+    const { whereSql, params } = mergeWhereParts([where]);
 
     const orderBy =
       buildOrderBy({
@@ -45,7 +46,6 @@ const cartItemService = {
     const selectColumns = buildSelectColumns({
       alias: "ci",
       columns: ["id", "cart_id", "product_id", "quantity", "created_at", "updated_at"],
-      showDeleted: queryParams.showDeleted,
     });
 
     const sql = `
@@ -55,6 +55,7 @@ const cartItemService = {
       ${orderBy}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
+
     const { rows } = await db.query(sql, [...params, limit, offset]);
 
     const countSql = `SELECT COUNT(*) AS total FROM cart_items ci ${whereSql}`;
@@ -65,27 +66,90 @@ const cartItemService = {
   },
 
   /**
-   * Get single cart item by ID
+   * Get cart item by ID
    */
-  async getById(id, showDeleted = "active") {
-    const softDeleteFilter = buildSoftDeleteScope("", showDeleted);
+  async getById(id) {
     const sql = `
-      SELECT id, cart_id, product_id, quantity, created_at, updated_at, deleted_at
+      SELECT id, cart_id, product_id, quantity, created_at, updated_at
       FROM cart_items
-      WHERE id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
+      WHERE id = $1
     `;
     const { rows } = await db.query(sql, [id]);
     return rows[0] || null;
   },
 
   /**
-   * Create new cart item
+   * Validate cart exists
    */
-  async create(data) {
-    if (data.quantity == null || data.quantity <= 0) {
-      const err = new Error("Quantity must be greater than 0");
-      err.status = 400;
-      throw err;
+  async _validateCart(cart_id) {
+    const sql = `
+      SELECT id, user_id, guest_token, status
+      FROM carts
+      WHERE id = $1 AND deleted_at IS NULL
+    `;
+    const { rows } = await db.query(sql, [cart_id]);
+    return rows[0] || null;
+  },
+
+  /**
+   * Validate product exists
+   */
+  async _validateProduct(product_id) {
+    const sql = `
+      SELECT id, price, stock, status
+      FROM products
+      WHERE id = $1 AND deleted_at IS NULL
+    `;
+    const { rows } = await db.query(sql, [product_id]);
+    return rows[0] || null;
+  },
+
+  /**
+   * Add an item into cart
+   * If exists → increase quantity
+   * If not → insert new item
+   */
+  async addItem(cart_id, product_id, quantity = 1) {
+    if (quantity <= 0) {
+      const e = new Error("Quantity must be greater than 0");
+      e.status = 400;
+      throw e;
+    }
+
+    const cart = await this._validateCart(cart_id);
+    if (!cart) {
+      const e = new Error("Cart not found");
+      e.status = 404;
+      throw e;
+    }
+
+    const product = await this._validateProduct(product_id);
+    if (!product) {
+      const e = new Error("Product not found");
+      e.status = 404;
+      throw e;
+    }
+
+    // Check duplicate (hard delete → no deleted_at filter)
+    const existingSql = `
+      SELECT id, quantity
+      FROM cart_items
+      WHERE cart_id = $1 AND product_id = $2
+      LIMIT 1
+    `;
+    const { rows: existRows } = await db.query(existingSql, [cart_id, product_id]);
+    const exists = existRows[0];
+
+    if (exists) {
+      const newQty = Number(exists.quantity) + Number(quantity);
+      const sql = `
+        UPDATE cart_items
+        SET quantity = $2, updated_at = now()
+        WHERE id = $1
+        RETURNING id, cart_id, product_id, quantity, updated_at
+      `;
+      const { rows } = await db.query(sql, [exists.id, newQty]);
+      return rows[0];
     }
 
     const id = uuidv4();
@@ -94,45 +158,80 @@ const cartItemService = {
       VALUES ($1, $2, $3, $4)
       RETURNING id, cart_id, product_id, quantity, created_at
     `;
-    const { rows } = await db.query(sql, [id, data.cart_id, data.product_id, data.quantity]);
+
+    const { rows } = await db.query(sql, [id, cart_id, product_id, quantity]);
     return rows[0];
   },
 
   /**
-   * Update existing cart item
+   * Update item QUANTITY only
    */
-  async update(id, data) {
-    if (data.quantity != null && data.quantity <= 0) {
-      const err = new Error("Quantity must be greater than 0");
-      err.status = 400;
-      throw err;
+  async updateQuantity(itemId, quantity) {
+    if (quantity <= 0) {
+      const e = new Error("Quantity must be greater than 0");
+      e.status = 400;
+      throw e;
     }
 
     const sql = `
       UPDATE cart_items
-      SET
-        cart_id = COALESCE($2, cart_id),
-        product_id = COALESCE($3, product_id),
-        quantity = COALESCE($4, quantity),
-        updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
+      SET quantity = $2, updated_at = now()
+      WHERE id = $1
       RETURNING id, cart_id, product_id, quantity, updated_at
     `;
-    const { rows } = await db.query(sql, [id, data.cart_id, data.product_id, data.quantity]);
+    const { rows } = await db.query(sql, [itemId, quantity]);
     return rows[0] || null;
   },
 
   /**
-   * Soft delete a cart item
+   * Get cart_id of item for owner check
    */
-  async remove(id) {
+  async getcart_idByItem(itemId) {
     const sql = `
-      UPDATE cart_items
-      SET deleted_at = now(), updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
+      SELECT cart_id
+      FROM cart_items
+      WHERE id = $1
     `;
-    const { rowCount } = await db.query(sql, [id]);
+    const { rows } = await db.query(sql, [itemId]);
+    return rows[0]?.cart_id || null;
+  },
+
+  /**
+   * Remove cart item (HARD DELETE)
+   */
+  async remove(itemId) {
+    const sql = `
+      DELETE FROM cart_items
+      WHERE id = $1
+    `;
+    const { rowCount } = await db.query(sql, [itemId]);
     return rowCount > 0;
+  },
+
+  /**
+   * Clear entire cart (HARD DELETE)
+   */
+  async clear(cart_id) {
+    const sql = `
+      DELETE FROM cart_items
+      WHERE cart_id = $1
+    `;
+    const { rowCount } = await db.query(sql, [cart_id]);
+    return rowCount > 0;
+  },
+
+  /**
+   * Get all items of a cart
+   */
+  async getItemsByCart(cart_id) {
+    const sql = `
+      SELECT id, cart_id, product_id, quantity, created_at, updated_at
+      FROM cart_items
+      WHERE cart_id = $1
+      ORDER BY created_at ASC
+    `;
+    const { rows } = await db.query(sql, [cart_id]);
+    return rows;
   },
 };
 

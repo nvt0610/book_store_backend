@@ -30,12 +30,19 @@ const addressController = {
 
   async create(req, res) {
     try {
-      const { user_id, full_name, phone, address_line } = req.body;
-      if (!isUuid(user_id)) return R.badRequest(res, "Invalid UUID for user_id");
-      if (!full_name || !phone || !address_line)
-        return R.badRequest(res, "Missing required fields: full_name, phone, address_line");
+      const { full_name, phone, address_line } = req.body;
 
-      const created = await addressService.create(req.body);
+      if (!full_name || !phone || !address_line) {
+        return R.badRequest(res, "Missing required fields: full_name, phone, address_line");
+      }
+
+      // Force user_id = req.user.id
+      const data = {
+        ...req.body,
+        user_id: req.user.id,
+      };
+
+      const created = await addressService.create(data);
       return R.created(res, created, "Address created successfully");
     } catch (err) {
       console.error("[addressesController.create] error:", err);

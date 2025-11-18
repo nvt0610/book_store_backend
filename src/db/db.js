@@ -25,13 +25,13 @@ const db = {
   async query(text, params = []) {
     const start = Date.now();
     const ctx = getRequestContext();
-    const userId = ctx.userId || null;
+    const user_id = ctx.user_id || null;
 
     const result = await pool.query(text, params);
     const duration = Date.now() - start;
 
     if (process.env.LOG_LEVEL === "debug") {
-      console.log(`[SQL][${duration}ms][user=${userId || "anon"}] ${text}`);
+      console.log(`[SQL][${duration}ms][user=${user_id || "anon"}] ${text}`);
     }
 
     return result;

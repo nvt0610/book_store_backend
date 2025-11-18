@@ -55,12 +55,12 @@ const authService = {
   async refreshToken(oldRefreshToken) {
     try {
       const decoded = jwt.verify(oldRefreshToken, process.env.JWT_SECRET);
-      const userId = decoded.sub;
+      const user_id = decoded.sub;
 
       // find active sessions
       const { rows } = await db.query(
         `SELECT id, hashed_token FROM user_sessions WHERE user_id = $1 AND is_revoked = false`,
-        [userId]
+        [user_id]
       );
 
       let session = null;
@@ -75,7 +75,7 @@ const authService = {
       if (!session) throw Object.assign(new Error("Invalid or revoked refresh token"), { status: 401 });
 
       // verify user still active
-      const { rows: users } = await db.query(`SELECT id, role, email, full_name, status FROM users WHERE id = $1`, [userId]);
+      const { rows: users } = await db.query(`SELECT id, role, email, full_name, status FROM users WHERE id = $1`, [user_id]);
       const user = users[0];
       if (!user || user.status !== "ACTIVE") throw Object.assign(new Error("User inactive or deleted"), { status: 403 });
 
@@ -121,21 +121,21 @@ const authService = {
   },
 
   /** Get current user info */
-  async getMe(userId) {
+  async getMe(user_id) {
     const sql = `
       SELECT id, full_name, email, phone, role, status, created_at, updated_at
       FROM users
       WHERE id = $1 AND deleted_at IS NULL
     `;
-    const { rows } = await db.query(sql, [userId]);
+    const { rows } = await db.query(sql, [user_id]);
     return rows[0] || null;
   },
 
   /** Update own profile */
-  async updateProfile(userId, data) {
+  async updateProfile(user_id, data) {
     const { full_name, first_name, last_name } = normalizeName(data);
     const sets = [];
-    const params = [userId];
+    const params = [user_id];
 
     if (full_name) {
       sets.push(`full_name = $${params.length + 1}`);
@@ -154,7 +154,7 @@ const authService = {
       params.push(data.phone);
     }
 
-    if (sets.length === 0) return this.getMe(userId);
+    if (sets.length === 0) return this.getMe(user_id);
 
     const sql = `
       UPDATE users
@@ -167,10 +167,10 @@ const authService = {
   },
 
   /** Logout (revoke refresh token) */
-  async logout(userId, refreshToken) {
+  async logout(user_id, refreshToken) {
     const { rows } = await db.query(
       `SELECT id, hashed_token FROM user_sessions WHERE user_id = $1 AND is_revoked = false`,
-      [userId]
+      [user_id]
     );
 
     for (const s of rows) {

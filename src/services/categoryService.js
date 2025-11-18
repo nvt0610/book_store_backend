@@ -178,8 +178,8 @@ const categoryService = {
  * If a product is already in another category, it will be reassigned.
  * Products already in this category are ignored.
  */
-  async addProducts(categoryId, productIds = []) {
-    if (!Array.isArray(productIds) || productIds.length === 0) return [];
+  async addProducts(categoryId, product_ids = []) {
+    if (!Array.isArray(product_ids) || product_ids.length === 0) return [];
 
     // Skip products that already belong to the same category
     const checkSql = `
@@ -188,9 +188,9 @@ const categoryService = {
         AND category_id = $2
         AND deleted_at IS NULL
     `;
-    const { rows: existing } = await db.query(checkSql, [productIds, categoryId]);
+    const { rows: existing } = await db.query(checkSql, [product_ids, categoryId]);
     const existingIds = existing.map((r) => r.id);
-    const filteredIds = productIds.filter((id) => !existingIds.includes(id));
+    const filteredIds = product_ids.filter((id) => !existingIds.includes(id));
 
     if (filteredIds.length === 0) return [];
 
@@ -210,9 +210,9 @@ const categoryService = {
    * Detach one or multiple products from a category.
    * Accepts a single UUID or an array of UUIDs in the request body.
    */
-  async removeProducts(categoryId, productIds = []) {
-    if (!Array.isArray(productIds)) productIds = [productIds];
-    if (productIds.length === 0) return 0;
+  async removeProducts(categoryId, product_ids = []) {
+    if (!Array.isArray(product_ids)) product_ids = [product_ids];
+    if (product_ids.length === 0) return 0;
 
     const sql = `
       UPDATE products
@@ -221,7 +221,7 @@ const categoryService = {
         AND id = ANY($2::uuid[])
         AND deleted_at IS NULL
     `;
-    const { rowCount } = await db.query(sql, [categoryId, productIds]);
+    const { rowCount } = await db.query(sql, [categoryId, product_ids]);
     return rowCount;
   },
 };

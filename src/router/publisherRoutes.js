@@ -1,21 +1,35 @@
+// src/routes/publisherRoutes.js
 import express from "express";
 import publisherController from "../controllers/publisherController.js";
+import { requireAuth } from "../middlewares/requireAuth.js";
+import { requireRole } from "../middlewares/requireRole.js";
 
 const router = express.Router();
 
-// GET /api/publishers
+// ===== Public GET =====
 router.get("/", publisherController.list);
-
-// GET /api/publishers/:id
 router.get("/:id", publisherController.getById);
 
-// POST /api/publishers
-router.post("/", publisherController.create);
+// ===== Admin-only =====
+router.post(
+    "/",
+    requireAuth,
+    requireRole("ADMIN"),
+    publisherController.create
+);
 
-// PUT /api/publishers/:id
-router.put("/:id", publisherController.update);
+router.put(
+    "/:id",
+    requireAuth,
+    requireRole("ADMIN"),
+    publisherController.update
+);
 
-// DELETE /api/publishers/:id
-router.delete("/:id", publisherController.remove);
+router.delete(
+    "/:id",
+    requireAuth,
+    requireRole("ADMIN"),
+    publisherController.remove
+);
 
 export default router;

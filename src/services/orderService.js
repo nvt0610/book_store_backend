@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import paginationHelper from "../helpers/paginationHelper.js";
 import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
+import { getRequestContext } from "../middlewares/requestContext.js";
+import { ensureAddressValid, ensureProductValid, ensureUserExists, } from "../helpers/orderValidationHelper.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
 const { buildFiltersWhere, mergeWhereParts, buildOrderBy } = queryHelper;
@@ -18,6 +20,16 @@ const orderService = {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
     const allowedFilters = ["user_id", "status", "address_id"];
     const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
+
+    // Inject user filter like addressService
+    const { user_id, role } = getRequestContext();
+    if (role !== "ADMIN") {
+      filters.push({
+        field: "user_id",
+        op: "eq",
+        value: user_id,
+      });
+    }
 
     const where = buildFiltersWhere({
       filters,
@@ -108,7 +120,7 @@ const orderService = {
    * Create a new order using mode: 'cart' | 'instant' | 'manual'
    * Each new order automatically creates a corresponding pending payment
    */
-  async createOrder({ mode, userId, addressId, cartId, productId, quantity = 1, items = [] }) {
+  async createOrder({ mode, user_id, address_id, cart_id, product_id, quantity = 1, items = [] }) {
     if (!mode) {
       const e = new Error("Missing mode (cart, instant, or manual)");
       e.status = 400;
@@ -117,11 +129,29 @@ const orderService = {
 
     switch (mode) {
       case "cart":
-        return await this._createFromCart(cartId, addressId);
-      case "instant":
-        return await this._createInstant(userId, addressId, productId, quantity);
-      case "manual":
-        return await this._createManual(userId, addressId, items);
+        return await this._createFromCart(cart_id, address_id);
+
+      case "instant": {
+        const { user_id } = getRequestContext();
+        return await this._createInstant(user_id, address_id, product_id, quantity);
+      }
+
+      case "manual": {
+        if (!user_id) {
+          const e = new Error("user_id is required for manual order");
+          e.status = 400;
+          throw e;
+        }
+
+        // validate target user exists
+        await ensureUserExists(user_id);
+
+        // validate address belongs to target user
+        await ensureAddressValid(address_id, user_id);
+
+        return await this._createManual(user_id, address_id, items);
+      }
+
       default: {
         const e = new Error("Invalid order creation mode");
         e.status = 400;
@@ -133,64 +163,82 @@ const orderService = {
   /**
    * Create order directly from a cart (checkout)
    */
-  async _createFromCart(cartId, addressId) {
+  async _createFromCart(cart_id, address_id) {
     const client = await db.getClient();
     try {
       await client.query("BEGIN");
 
+      // Validate cart
       const { rows: carts } = await client.query(
-        `SELECT id, user_id, status FROM carts WHERE id = $1 AND deleted_at IS NULL`,
-        [cartId]
+        `SELECT id, user_id, status 
+       FROM carts 
+       WHERE id = $1 AND deleted_at IS NULL`,
+        [cart_id]
       );
-      if (carts.length === 0) throw new Error("Cart not found");
+      if (!carts.length) throw new Error("Cart not found");
       const cart = carts[0];
       if (cart.status !== "ACTIVE") throw new Error("Cart is not ACTIVE");
 
+      // Validate address ownership
+      await ensureAddressValid(address_id, cart.user_id);
+
+      // Load items
       const { rows: items } = await client.query(
         `SELECT ci.product_id, ci.quantity, p.price
-         FROM cart_items ci
-         JOIN products p ON p.id = ci.product_id AND p.deleted_at IS NULL
-         WHERE ci.cart_id = $1 AND ci.deleted_at IS NULL`,
-        [cartId]
+       FROM cart_items ci
+       JOIN products p 
+             ON p.id = ci.product_id AND p.deleted_at IS NULL
+       WHERE ci.cart_id = $1`,
+        [cart_id]
       );
-      if (items.length === 0) throw new Error("Cart is empty");
+      if (!items.length) throw new Error("Cart is empty");
 
+      // Validate each product
+      for (const it of items) {
+        await ensureProductValid(it.product_id);
+      }
+
+      // Calculate totals
       let total = 0;
       const snapshot = items.map((it) => {
         const qty = Math.max(1, parseInt(it.quantity, 10));
         const price = Number(it.price);
         total += qty * price;
-        return { productId: it.product_id, quantity: qty, price };
+        return { product_id: it.product_id, quantity: qty, price };
       });
 
-      const orderId = uuidv4();
-      const orderSql = `
-        INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
-        VALUES ($1, $2, $3, $4, 'PENDING', now())
-        RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at
-      `;
-      const { rows: orderRows } = await client.query(orderSql, [
-        orderId, cart.user_id, addressId, total,
-      ]);
+      const order_id = uuidv4();
 
+      // Create order
+      const { rows: orderRows } = await client.query(
+        `INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
+       VALUES ($1, $2, $3, $4, 'PENDING', now())
+       RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
+        [order_id, cart.user_id, address_id, total]
+      );
+
+      // Create items
       for (const it of snapshot) {
         await client.query(
           `INSERT INTO order_items (id, order_id, product_id, quantity, price)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [uuidv4(), orderId, it.productId, it.quantity, it.price]
+         VALUES ($1, $2, $3, $4, $5)`,
+          [uuidv4(), order_id, it.product_id, it.quantity, it.price]
         );
       }
 
       // Create pending payment
       await client.query(
         `INSERT INTO payments (id, order_id, payment_method, amount, status)
-         VALUES ($1, $2, 'COD', $3, 'PENDING')`,
-        [uuidv4(), orderId, total]
+       VALUES ($1, $2, 'COD', $3, 'PENDING')`,
+        [uuidv4(), order_id, total]
       );
 
+      // Mark cart as checked out
       await client.query(
-        `UPDATE carts SET status = 'CHECKED_OUT', updated_at = now() WHERE id = $1`,
-        [cartId]
+        `UPDATE carts 
+       SET status = 'CHECKED_OUT', updated_at = now()
+       WHERE id = $1`,
+        [cart_id]
       );
 
       await client.query("COMMIT");
@@ -206,44 +254,56 @@ const orderService = {
   /**
    * Create order instantly for a single product ("Buy Now")
    */
-  async _createInstant(userId, addressId, productId, quantity = 1) {
+  async _createInstant(user_id, address_id, product_id, quantity = 1) {
     const client = await db.getClient();
     try {
       await client.query("BEGIN");
 
+      // Validate address ownership
+      await ensureAddressValid(address_id, user_id);
+
+      // Validate product
+      await ensureProductValid(product_id);
+
+      // Load product price
       const { rows: pr } = await client.query(
-        `SELECT price FROM products WHERE id = $1 AND deleted_at IS NULL`,
-        [productId]
+        `SELECT price 
+       FROM products 
+       WHERE id = $1 AND deleted_at IS NULL`,
+        [product_id]
       );
-      if (pr.length === 0) throw new Error("Product not found");
+      if (!pr.length) throw new Error("Product not found");
 
       const price = Number(pr[0].price);
       const qty = Math.max(1, parseInt(quantity, 10));
       const total = qty * price;
-      const orderId = uuidv4();
 
+      const order_id = uuidv4();
+
+      // Create order
       const { rows: orderRows } = await client.query(
         `INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
-         VALUES ($1, $2, $3, $4, 'PENDING', now())
-         RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
-        [orderId, userId, addressId, total]
+       VALUES ($1, $2, $3, $4, 'PENDING', now())
+       RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
+        [order_id, user_id, address_id, total]
       );
 
+      // Insert item
       await client.query(
         `INSERT INTO order_items (id, order_id, product_id, quantity, price)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [uuidv4(), orderId, productId, qty, price]
+       VALUES ($1, $2, $3, $4, $5)`,
+        [uuidv4(), order_id, product_id, qty, price]
       );
 
-      // Create pending payment
+      // Create payment
       await client.query(
         `INSERT INTO payments (id, order_id, payment_method, amount, status)
-         VALUES ($1, $2, 'COD', $3, 'PENDING')`,
-        [uuidv4(), orderId, total]
+       VALUES ($1, $2, 'COD', $3, 'PENDING')`,
+        [uuidv4(), order_id, total]
       );
 
       await client.query("COMMIT");
-      return { ...orderRows[0], items: [{ productId, quantity: qty, price }] };
+      return { ...orderRows[0], items: [{ product_id, quantity: qty, price }] };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -255,12 +315,18 @@ const orderService = {
   /**
    * Create order manually with provided items (admin use)
    */
-  async _createManual(userId, addressId, items = []) {
-    if (!Array.isArray(items) || items.length === 0) {
+  async _createManual(user_id, address_id, items = []) {
+    if (!Array.isArray(items) || !items.length) {
       const e = new Error("Items required");
       e.status = 400;
       throw e;
     }
+
+    // Validate user exists
+    await ensureUserExists(user_id);
+
+    // Validate address belongs to this user
+    await ensureAddressValid(address_id, user_id);
 
     const client = await db.getClient();
     try {
@@ -268,42 +334,56 @@ const orderService = {
 
       let total = 0;
       const resolvedItems = [];
+
+      // Validate items
       for (const it of items) {
+        await ensureProductValid(it.product_id);
+
         const qty = Math.max(1, parseInt(it.quantity ?? 1, 10));
         let price = it.price;
+
+        // If price not provided → load from DB
         if (price == null) {
           const { rows: pr } = await client.query(
-            `SELECT price FROM products WHERE id = $1 AND deleted_at IS NULL`,
-            [it.productId]
+            `SELECT price 
+           FROM products 
+           WHERE id = $1 AND deleted_at IS NULL`,
+            [it.product_id]
           );
-          if (pr.length === 0) throw new Error("Product not found");
+
+          if (!pr.length) throw new Error("Product not found");
+
           price = Number(pr[0].price);
         }
+
         total += qty * price;
-        resolvedItems.push({ productId: it.productId, quantity: qty, price });
+        resolvedItems.push({ product_id: it.product_id, quantity: qty, price });
       }
 
-      const orderId = uuidv4();
+      const order_id = uuidv4();
+
+      // Create order
       const { rows: orderRows } = await client.query(
         `INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
-         VALUES ($1, $2, $3, $4, 'PENDING', now())
-         RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
-        [orderId, userId, addressId, total]
+       VALUES ($1, $2, $3, $4, 'PENDING', now())
+       RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
+        [order_id, user_id, address_id, total]
       );
 
+      // Insert items
       for (const it of resolvedItems) {
         await client.query(
           `INSERT INTO order_items (id, order_id, product_id, quantity, price)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [uuidv4(), orderId, it.productId, it.quantity, it.price]
+         VALUES ($1, $2, $3, $4, $5)`,
+          [uuidv4(), order_id, it.product_id, it.quantity, it.price]
         );
       }
 
-      // Create pending payment
+      // Create payment
       await client.query(
         `INSERT INTO payments (id, order_id, payment_method, amount, status)
-         VALUES ($1, $2, 'COD', $3, 'PENDING')`,
-        [uuidv4(), orderId, total]
+       VALUES ($1, $2, 'COD', $3, 'PENDING')`,
+        [uuidv4(), order_id, total]
       );
 
       await client.query("COMMIT");
@@ -320,28 +400,114 @@ const orderService = {
    * Update existing order (status, address, etc.)
    */
   async updateOrder(id, data) {
+    // 1. Fetch current order status
+    const sqlGet = `
+    SELECT status
+    FROM orders
+    WHERE id = $1 AND deleted_at IS NULL
+  `;
+    const { rows: currentRows } = await db.query(sqlGet, [id]);
+
+    if (currentRows.length === 0) {
+      return null;
+    }
+
+    const currentStatus = currentRows[0].status;
+
+    // 2. Terminal states 
+    if (["COMPLETED", "INACTIVE"].includes(currentStatus)) {
+      const err = new Error("Cannot update a completed or cancelled order");
+      err.status = 400;
+      throw err;
+    }
+
+    // 3. Build update sets
     const sets = [];
     const params = [id];
 
+    // Update status
     if (data.status) {
       sets.push(`status = $${params.length + 1}`);
       params.push(data.status);
-      if (data.status === "COMPLETED") sets.push(`paid_at = now()`);
+
+      if (data.status === "COMPLETED") {
+        sets.push(`paid_at = now()`);
+      }
     }
+
+    // Update address
     if (data.address_id) {
       sets.push(`address_id = $${params.length + 1}`);
       params.push(data.address_id);
     }
-    if (sets.length === 0) return await this.getOrderById(id);
 
+    if (sets.length === 0) {
+      return await this.getOrderById(id);
+    }
+
+    // 4. Perform update
     const sql = `
-      UPDATE orders
-      SET ${sets.join(", ")}, updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id, user_id, address_id, total_amount, status, placed_at, paid_at, updated_at
-    `;
+    UPDATE orders
+    SET ${sets.join(", ")}, updated_at = now()
+    WHERE id = $1 AND deleted_at IS NULL
+    RETURNING id, user_id, address_id, total_amount, status, placed_at, paid_at, updated_at
+  `;
+
     const { rows } = await db.query(sql, params);
     return rows[0] || null;
+  },
+
+  /**
+   * Cancel existing order (reason optional)
+   */
+  async cancelOrder(id, reason = null) {
+    const { user_id } = getRequestContext();
+
+    // 1. Validate order exists + status
+    const sqlGet = `
+      SELECT status
+      FROM orders
+      WHERE id = $1 AND deleted_at IS NULL
+    `;
+    const { rows } = await db.query(sqlGet, [id]);
+    if (!rows.length) {
+      const e = new Error("Order not found");
+      e.status = 404;
+      throw e;
+    }
+
+    if (rows[0].status !== "PENDING") {
+      const e = new Error("Only PENDING orders can be cancelled");
+      e.status = 400;
+      throw e;
+    }
+
+    // 2. Update order
+    const sql = `
+      UPDATE orders
+      SET 
+        status = 'INACTIVE',
+        cancel_reason = $2,
+        updated_by = $3,
+        updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, status, cancel_reason, updated_at
+    `;
+    const { rows: updated } = await db.query(sql, [id, reason, user_id]);
+
+    // 3. Update payment (optional)
+    const { rowCount: pCount } = await db.query(
+      `UPDATE payments
+        SET status = 'INACTIVE', updated_at = now()
+        WHERE order_id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+
+    if (pCount === 0) {
+      console.warn("[WARN] cancelOrder: no payment associated with order", id);
+    }
+
+    return updated[0];
   },
 
   /**

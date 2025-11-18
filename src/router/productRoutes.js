@@ -1,21 +1,35 @@
+// src/routes/productRoutes.js
 import express from "express";
 import productController from "../controllers/productController.js";
+import { requireAuth } from "../middlewares/requireAuth.js";
+import { requireRole } from "../middlewares/requireRole.js";
 
 const router = express.Router();
 
-// GET /api/products
+// ===== Public endpoints =====
 router.get("/", productController.list);
-
-// GET /api/products/:id
 router.get("/:id", productController.getById);
 
-// POST /api/products
-router.post("/", productController.create);
+// ===== Admin-only endpoints =====
+router.post(
+    "/",
+    requireAuth,
+    requireRole("ADMIN"),
+    productController.create
+);
 
-// PUT /api/products/:id
-router.put("/:id", productController.update);
+router.put(
+    "/:id",
+    requireAuth,
+    requireRole("ADMIN"),
+    productController.update
+);
 
-// DELETE /api/products/:id  (soft delete → status = INACTIVE)
-router.delete("/:id", productController.remove);
+router.delete(
+    "/:id",
+    requireAuth,
+    requireRole("ADMIN"),
+    productController.remove
+);
 
 export default router;
