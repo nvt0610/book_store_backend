@@ -191,7 +191,23 @@ const orderService = {
        WHERE ci.cart_id = $1`,
         [cart_id]
       );
+
       if (!items.length) throw new Error("Cart is empty");
+
+      for (const it of items) {
+        const { rows: stockRows } = await client.query(
+          `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
+          [it.product_id]
+        );
+        const stock = Number(stockRows[0].stock);
+        const qty = Number(it.quantity);
+
+        if (qty > stock) {
+          throw new Error(
+            `Product ${it.product_id} has only ${stock} units in stock, cannot purchase ${qty}`
+          );
+        }
+      }
 
       // Validate each product
       for (const it of items) {
@@ -264,6 +280,18 @@ const orderService = {
 
       // Validate product
       await ensureProductValid(product_id);
+
+      const { rows: stockRows } = await client.query(
+        `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
+        [product_id]
+      );
+      const stock = Number(stockRows[0].stock);
+
+      if (quantity > stock) {
+        throw new Error(
+          `Product has only ${stock} units in stock, cannot purchase ${quantity}`
+        );
+      }
 
       // Load product price
       const { rows: pr } = await client.query(
@@ -339,7 +367,19 @@ const orderService = {
       for (const it of items) {
         await ensureProductValid(it.product_id);
 
+        const { rows: stockRows } = await client.query(
+          `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
+          [it.product_id]
+        );
+        const stock = Number(stockRows[0].stock);
         const qty = Math.max(1, parseInt(it.quantity ?? 1, 10));
+
+        if (qty > stock) {
+          throw new Error(
+            `Product ${it.product_id} has only ${stock} units in stock, cannot place an order for ${qty}`
+          );
+        }
+
         let price = it.price;
 
         // If price not provided → load from DB
@@ -355,6 +395,8 @@ const orderService = {
 
           price = Number(pr[0].price);
         }
+
+        if (price < 0) throw Error("Price must be >= 0");
 
         total += qty * price;
         resolvedItems.push({ product_id: it.product_id, quantity: qty, price });
@@ -425,14 +467,18 @@ const orderService = {
     const sets = [];
     const params = [id];
 
-    // Update status
+    // 3) Validate status BEFORE applying changes
     if (data.status) {
+      if (data.status === "COMPLETED") {
+        const err = new Error(
+          "Use paymentService.markPaymentCompletedByOrder() to complete order"
+        );
+        err.status = 400;
+        throw err;
+      }
+
       sets.push(`status = $${params.length + 1}`);
       params.push(data.status);
-
-      if (data.status === "COMPLETED") {
-        sets.push(`paid_at = now()`);
-      }
     }
 
     // Update address

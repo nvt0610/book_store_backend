@@ -75,18 +75,9 @@ const authorService = {
     return rows[0] || null;
   },
 
+  //bỏ check trùng tên khi tạo và cập nhật
   async createAuthor(data) {
     const id = uuidv4();
-    const exists = await db.query(
-      "SELECT 1 FROM authors WHERE LOWER(name) = LOWER($1) AND deleted_at IS NULL",
-      [data.name]
-    );
-    if (exists.rowCount > 0) {
-      const err = new Error("Name already exists");
-      err.status = 409;
-      throw err;
-    }
-
     const sql = `
       INSERT INTO authors (id, name, biography, photo_url)
       VALUES ($1, $2, $3, $4)
@@ -97,18 +88,6 @@ const authorService = {
   },
 
   async updateAuthor(id, data) {
-    if (data.name) {
-      const dup = await db.query(
-        "SELECT 1 FROM authors WHERE LOWER(name) = LOWER($1) AND id <> $2 AND deleted_at IS NULL",
-        [data.name, id]
-      );
-      if (dup.rowCount > 0) {
-        const err = new Error("Name already exists");
-        err.status = 409;
-        throw err;
-      }
-    }
-
     const sql = `
       UPDATE authors
       SET

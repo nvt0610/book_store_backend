@@ -1,63 +1,67 @@
-// src/controllers/paymentController.js
-
-import { validate as isUuid } from "uuid";
 import paymentService from "../services/paymentService.js";
 import responseHelper from "../helpers/responseHelper.js";
-import { getRequestContext } from "../middlewares/requestContext.js";
+import validate from "../helpers/validateHelper.js";
 
 const R = responseHelper;
 
+const PAYMENT_METHODS = ["COD", "CREDIT_CARD", "VNPAY", "MOMO"];
+const PAYMENT_STATUS = ["PENDING", "COMPLETED", "INACTIVE"];
+
 const paymentController = {
-  /** List all payments (customer: own only, admin: all) */
   async list(req, res) {
     try {
       const result = await paymentService.listPayments(req.query);
       return R.ok(res, result, "Fetched payments successfully");
     } catch (err) {
-      console.error("[paymentController.list] error:", err);
+      console.error("[paymentController.list]", err);
       return R.internalError(res, err.message);
     }
   },
 
-  /** Get payment by id */
   async getById(req, res) {
     try {
       const { id } = req.params;
-      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID");
+      validate.uuid(id, "id");
 
       const payment = await paymentService.getById(id);
-      if (!payment) return R.notFound(res, "Payment not found");
-
-      return R.ok(res, payment, "Fetched payment successfully");
+      return payment
+        ? R.ok(res, payment, "Fetched payment successfully")
+        : R.notFound(res, "Payment not found");
     } catch (err) {
-      console.error("[paymentController.getById] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[paymentController.getById]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
-  /** List payments by order */
   async listByOrder(req, res) {
     try {
       const { order_id } = req.params;
-      if (!isUuid(order_id)) return R.badRequest(res, "Invalid order_id");
+      validate.uuid(order_id, "order_id");
 
       const payments = await paymentService.listByOrder(order_id);
       return R.ok(res, payments, "Fetched payments for order");
     } catch (err) {
-      console.error("[paymentController.listByOrder] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[paymentController.listByOrder]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
   /** Admin create payment */
   async create(req, res) {
     try {
+      const { order_id, payment_method, amount, payment_ref } = req.body;
+
+      validate.uuid(order_id, "order_id");
+      validate.enum(payment_method, PAYMENT_METHODS, "payment_method");
+      validate.positive(amount, "amount");
+
+      if (payment_ref) validate.trimString(payment_ref, "payment_ref");
+
       const result = await paymentService.createPayment(req.body);
       return R.created(res, result, "Payment created");
     } catch (err) {
-      console.error("[paymentController.create] error:", err);
-      if (err.status === 400) return R.badRequest(res, err.message);
-      return R.internalError(res, err.message);
+      console.error("[paymentController.create]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
@@ -65,16 +69,31 @@ const paymentController = {
   async update(req, res) {
     try {
       const { id } = req.params;
-      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID");
+      validate.uuid(id, "id");
 
-      const updated = await paymentService.updatePayment(id, req.body);
-      if (!updated) return R.notFound(res, "Payment not found");
+      const body = req.body;
 
-      return R.ok(res, updated, "Payment updated");
+      if (body.payment_method)
+        validate.enum(body.payment_method, PAYMENT_METHODS, "payment_method");
+
+      if (body.amount != null)
+        validate.positive(body.amount, "amount");
+
+      if (body.status)
+        validate.enum(body.status, PAYMENT_STATUS, "status");
+
+      if (body.payment_ref)
+        validate.trimString(body.payment_ref, "payment_ref");
+
+      const updated = await paymentService.updatePayment(id, body);
+
+      return updated
+        ? R.ok(res, updated, "Payment updated")
+        : R.notFound(res, "Payment not found");
+
     } catch (err) {
-      console.error("[paymentController.update] error:", err);
-      if (err.status === 400) return R.badRequest(res, err.message);
-      return R.internalError(res, err.message);
+      console.error("[paymentController.update]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
@@ -82,42 +101,43 @@ const paymentController = {
   async remove(req, res) {
     try {
       const { id } = req.params;
-      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID");
+      validate.uuid(id, "id");
 
       const ok = await paymentService.deletePayment(id);
-      if (!ok) return R.notFound(res, "Payment not found");
 
-      return R.ok(res, { deleted: true }, "Payment deleted");
+      return ok
+        ? R.ok(res, { deleted: true }, "Payment deleted")
+        : R.notFound(res, "Payment not found");
     } catch (err) {
-      console.error("[paymentController.remove] error:", err);
+      console.error("[paymentController.remove]", err);
       return R.internalError(res, err.message);
     }
   },
 
-  /** Admin complete payment of order */
+  /** Admin complete payment for an order */
   async markCompletedByOrder(req, res) {
     try {
       const { order_id } = req.params;
-      if (!isUuid(order_id)) return R.badRequest(res, "Invalid order_id");
+      validate.uuid(order_id, "order_id");
 
       const data = await paymentService.markPaymentCompletedByOrder(order_id);
       return R.ok(res, data, "Payment marked as completed");
     } catch (err) {
-      console.error("[paymentController.markCompletedByOrder] error:", err);
+      console.error("[paymentController.markCompletedByOrder]", err);
       return R.internalError(res, err.message);
     }
   },
 
-  /** Admin cancel pending payments of order */
+  /** Admin cancel pending payments */
   async cancelPendingByOrder(req, res) {
     try {
       const { order_id } = req.params;
-      if (!isUuid(order_id)) return R.badRequest(res, "Invalid order_id");
+      validate.uuid(order_id, "order_id");
 
       const data = await paymentService.cancelPendingByOrder(order_id);
       return R.ok(res, data, "Pending payments cancelled");
     } catch (err) {
-      console.error("[paymentController.cancelPendingByOrder] error:", err);
+      console.error("[paymentController.cancelPendingByOrder]", err);
       return R.internalError(res, err.message);
     }
   },

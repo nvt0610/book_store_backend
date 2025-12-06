@@ -1,121 +1,100 @@
-// src/controllers/cartItemController.js
-
 import cartItemService from "../services/cartItemService.js";
 import responseHelper from "../helpers/responseHelper.js";
-import { validate as isUuid } from "uuid";
+import validate from "../helpers/validateHelper.js";
 
 const R = responseHelper;
 
 const cartItemController = {
-  /**
-   * ADMIN ONLY - list all cart items
-   */
   async list(req, res) {
     try {
       const result = await cartItemService.list(req.query);
       return R.ok(res, result, "Fetched cart items successfully");
     } catch (err) {
-      console.error("[cartItemController.list] error:", err);
+      console.error("[cartItemController.list]", err);
       return R.internalError(res, err.message);
     }
   },
 
-  /**
-   * ADMIN ONLY - get single item
-   */
   async getById(req, res) {
     try {
-      const { itemId } = req.params;
-      if (!isUuid(itemId)) return R.badRequest(res, "Invalid itemId");
+      validate.uuid(req.params.itemId, "itemId");
 
-      const item = await cartItemService.getById(itemId, req.query.showDeleted);
-      if (!item) return R.notFound(res, "Cart item not found");
+      const item = await cartItemService.getById(
+        req.params.itemId,
+        req.query.showDeleted
+      );
 
-      return R.ok(res, item, "Fetched cart item successfully");
+      return item
+        ? R.ok(res, item, "Fetched cart item successfully")
+        : R.notFound(res, "Cart item not found");
     } catch (err) {
-      console.error("[cartItemController.getById] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[cartItemController.getById]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
-  /**
-   * PUBLIC - add item to cart
-   * Guest or user must own the cart
-   */
   async addItem(req, res) {
     try {
       const { cart_id, product_id, quantity } = req.body;
 
-      const cid = cart_id;
-      const pid = product_id || product_id;
+      validate.uuid(cart_id, "cart_id");
+      validate.uuid(product_id, "product_id");
+      validate.positive(quantity, "quantity");
 
-      if (!isUuid(cid)) return R.badRequest(res, "Invalid cart_id");
-      if (!isUuid(pid)) return R.badRequest(res, "Invalid product_id");
-
-      const item = await cartItemService.addItem(cid, pid, quantity);
+      const item = await cartItemService.addItem(cart_id, product_id, quantity);
       return R.created(res, item, "Item added to cart");
     } catch (err) {
-      console.error("[cartItemController.addItem] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[cartItemController.addItem]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
-  /**
-   * PUBLIC - update quantity
-   */
   async updateQuantity(req, res) {
     try {
-      const { itemId } = req.params;
-      const { quantity } = req.body;
+      validate.uuid(req.params.itemId, "itemId");
+      validate.positive(req.body.quantity, "quantity");
 
-      if (!isUuid(itemId)) return R.badRequest(res, "Invalid itemId");
-      if (quantity == null || quantity <= 0)
-        return R.badRequest(res, "Quantity must be > 0");
+      const updated = await cartItemService.updateQuantity(
+        req.params.itemId,
+        req.body.quantity
+      );
 
-      const updated = await cartItemService.updateQuantity(itemId, quantity);
-      if (!updated) return R.notFound(res, "Cart item not found");
-
-      return R.ok(res, updated, "Cart item updated");
+      return updated
+        ? R.ok(res, updated, "Cart item updated")
+        : R.notFound(res, "Cart item not found");
     } catch (err) {
-      console.error("[cartItemController.updateQuantity] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[cartItemController.updateQuantity]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
-  /**
-   * PUBLIC - remove 1 item from cart
-   */
   async removeItem(req, res) {
     try {
-      const { itemId } = req.params;
-      if (!isUuid(itemId)) return R.badRequest(res, "Invalid itemId");
+      validate.uuid(req.params.itemId, "itemId");
 
-      const ok = await cartItemService.remove(itemId);
-      if (!ok) return R.notFound(res, "Cart item not found");
+      const ok = await cartItemService.remove(req.params.itemId);
 
-      return R.ok(res, { deleted: true }, "Cart item removed");
+      return ok
+        ? R.ok(res, { deleted: true }, "Cart item removed")
+        : R.notFound(res, "Cart item not found");
     } catch (err) {
-      console.error("[cartItemController.removeItem] error:", err);
+      console.error("[cartItemController.removeItem]", err);
       return R.internalError(res, err.message);
     }
   },
 
-  /**
-   * PUBLIC - clear whole cart
-   */
   async clear(req, res) {
     try {
       const cart_id = req.body.cart_id || req.query.cart_id;
 
-      if (!isUuid(cart_id))
-        return R.badRequest(res, "Invalid cart_id");
+      validate.uuid(cart_id, "cart_id");
 
-      const ok = await cartItemService.clear(cart_id);
+      await cartItemService.clear(cart_id);
+
       return R.ok(res, { cleared: true }, "Cart cleared");
-
     } catch (err) {
-      console.error("[cartItemController.clear] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[cartItemController.clear]", err);
+      return R.badRequest(res, err.message);
     }
   }
 };

@@ -276,6 +276,17 @@ const cartService = {
 
         if (existing[0]) {
           const updatedQty = Number(existing[0].quantity) + qty;
+          const { rows: prRows } = await client.query(
+            `SELECT stock FROM products WHERE id = $1`,
+            [it.product_id]
+          );
+          const stock = Number(prRows[0].stock);
+
+          if (updatedQty > stock) {
+            `Cannot merge: total quantity (${updatedQty}) exceeds available stock (${stock})`
+            e.status = 400;
+            throw e;
+          }
           await client.query(
             `
             UPDATE cart_items
@@ -285,11 +296,24 @@ const cartService = {
             [existing[0].id, updatedQty]
           );
         } else {
+          // check stock before insert
+          const { rows: pr2Rows } = await client.query(
+            `SELECT stock FROM products WHERE id = $1`,
+            [it.product_id]
+          );
+          const stock2 = Number(pr2Rows[0].stock);
+
+          if (qty > stock2) {
+            `Cannot merge: quantity (${qty}) exceeds available stock (${stock2})`
+            e.status = 400;
+            throw e;
+          }
+
           await client.query(
             `
-            INSERT INTO cart_items (id, cart_id, product_id, quantity)
-            VALUES ($1, $2, $3, $4)
-          `,
+    INSERT INTO cart_items (id, cart_id, product_id, quantity)
+    VALUES ($1, $2, $3, $4)
+  `,
             [uuidv4(), userCart.id, it.product_id, qty]
           );
         }

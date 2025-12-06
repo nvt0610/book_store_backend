@@ -130,6 +130,15 @@ const cartItemService = {
       throw e;
     }
 
+    const stock = Number(product.stock);
+    const reqQty = Number(quantity);
+
+    if (reqQty > stock) {
+      const e = new Error(`Số lượng yêu cầu (${reqQty}) vượt quá tồn kho (${stock})`);
+      e.status = 400;
+      throw e;
+    }
+
     // Check duplicate (hard delete → no deleted_at filter)
     const existingSql = `
       SELECT id, quantity
@@ -142,6 +151,11 @@ const cartItemService = {
 
     if (exists) {
       const newQty = Number(exists.quantity) + Number(quantity);
+      if (newQty > stock) {
+        const e = new Error(`Số lượng mới (${newQty}) vượt quá tồn kho (${stock})`);
+        e.status = 400;
+        throw e;
+      }
       const sql = `
         UPDATE cart_items
         SET quantity = $2, updated_at = now()
@@ -169,6 +183,27 @@ const cartItemService = {
   async updateQuantity(itemId, quantity) {
     if (quantity <= 0) {
       const e = new Error("Quantity must be greater than 0");
+      e.status = 400;
+      throw e;
+    }
+
+    // Lấy product_id để check stock
+    const itemRow = await db.query(
+      `SELECT product_id FROM cart_items WHERE id = $1`,
+      [itemId]
+    );
+    if (!itemRow.rows.length) return null;
+
+    const product = await this._validateProduct(itemRow.rows[0].product_id);
+    if (!product) {
+      const e = new Error("Product not found");
+      e.status = 404;
+      throw e;
+    }
+
+    const stock = Number(product.stock);
+    if (Number(quantity) > stock) {
+      const e = new Error(`Số lượng mới (${quantity}) vượt quá tồn kho (${stock})`);
       e.status = 400;
       throw e;
     }

@@ -1,120 +1,152 @@
 import userService from "../services/userService.js";
 import responseHelper from "../helpers/responseHelper.js";
-import { validate as isUuid } from "uuid";
+import validate from "../helpers/validateHelper.js";
 
 const R = responseHelper;
 
-/**
- * Controller layer for handling HTTP requests related to users.
- * - Delegates business logic to the service layer
- * - Handles request parsing, response formatting, and error handling
- */
+const USER_ROLES = ["GUEST", "CUSTOMER", "ADMIN"];
+const USER_STATUS = ["ACTIVE", "INACTIVE"];
+
 const userController = {
-    /**
-     * Handle GET /users
-     * Supports query parameters:
-     *   ?q=searchText
-     *   ?sortBy=email&sortDir=ASC
-     *   ?page=2&pageSize=10
-     *   ?filters[0][field]=status&filters[0][op]=eq&filters[0][value]=ACTIVE
-     */
-    async list(req, res) {
-        try {
-            const queryParams = {
-                ...req.query,
-                filters: req.query.filters || [],
-                sortBy: req.query.sortBy,
-                sortDir: req.query.sortDir,
-                q: req.query.q,
-                page: req.query.page,
-                pageSize: req.query.pageSize,
-                showDeleted: req.query.showDeleted || "active",
-            };
+  /** GET /users */
+  async list(req, res) {
+    try {
+      const queryParams = {
+        ...req.query,
+        filters: req.query.filters || [],
+        sortBy: req.query.sortBy,
+        sortDir: req.query.sortDir,
+        q: req.query.q,
+        page: req.query.page,
+        pageSize: req.query.pageSize,
+        showDeleted: req.query.showDeleted || "active",
+      };
 
-            const result = await userService.listUsers(queryParams);
-            return R.ok(res, result, "Fetched users successfully");
-        } catch (error) {
-            console.error("listUsers error:", error);
-            return R.internalError(res, error.message);
-        }
-    },
+      const result = await userService.listUsers(queryParams);
+      return R.ok(res, result, "Fetched users successfully");
+    } catch (error) {
+      console.error("[userController.list]", error);
+      return R.internalError(res, error.message);
+    }
+  },
 
-    /**
-     * Handle GET /users/:id
-     * Fetch details of a single user by ID.
-     */
-    async getById(req, res) {
-        try {
-            const { id } = req.params;
-            const showDeleted = req.query.showDeleted || "active";
-            const user = await userService.getUserById(id, showDeleted);
-            if (!user) return R.notFound(res, "User not found");
-            return R.ok(res, user, "Fetched user successfully");
-        } catch (error) {
-            console.error("getUserById error:", error);
-            return R.internalError(res, error.message);
-        }
-    },
+  /** GET /users/:id */
+  async getById(req, res) {
+    try {
+      validate.uuid(req.params.id, "id");
 
-    /**
-     * Handle POST /users
-     * Create a new user record.
-     * Body required: { full_name, email, password, phone?, role? }
-     */
-    async create(req, res) {
-        try {
-            const body = req.body;
-            if (!body.email || !body.password || (!body.full_name && !body.first_name && !body.last_name)) {
-                return R.badRequest(res, "Missing required fields: name, email, password");
-            }
+      const user = await userService.getUserById(
+        req.params.id,
+        req.query.showDeleted || "active"
+      );
 
-            const user = await userService.createUser(body);
-            return R.created(res, user, "User created successfully");
-        } catch (error) {
-            console.error("createUser error:", error);
-            if (error.code === "23505") return R.conflict(res, "Email already exists");
-            return R.internalError(res, error.message);
-        }
-    },
+      return user
+        ? R.ok(res, user, "Fetched user successfully")
+        : R.notFound(res, "User not found");
+    } catch (error) {
+      console.error("[userController.getById]", error);
+      return R.badRequest(res, error.message);
+    }
+  },
 
-    /**
-     * Handle PUT /users/:id
-     * Update an existing user.
-     * Body can include any updatable fields: { full_name?, phone?, role?, status? }
-     */
-    async update(req, res) {
-        try {
-            const id = (req.params.id || "").trim();
+  /** POST /users */
+  async create(req, res) {
+    try {
+      const body = req.body;
 
-            // Validate UUID format trước khi query
-            if (!isUuid(id)) {
-                return R.badRequest(res, "Invalid UUID format");
-            }
+      // Required
+      validate.required(body.email, "email");
+      validate.email(body.email);
+      validate.maxLength(body.email, 150, "email");
 
-            const user = await userService.updateUser(id, req.body);
-            if (!user) return R.notFound(res, "User not found");
-            return R.ok(res, user, "User updated successfully");
-        } catch (error) {
-            console.error("updateUser error:", error);
-            return R.internalError(res, error.message);
-        }
-    },
+      validate.required(body.password, "password");
 
-    /**
-     * Handle DELETE /users/:id
-     * Soft delete a user (marks deleted_at).
-     */
-    async remove(req, res) {
-        try {
-            const { id } = req.params;
-            const deleted = await userService.deleteUser(id);
-            if (!deleted) return R.notFound(res, "User not found or already deleted");
-            return R.ok(res, { deleted: true }, "User soft deleted successfully");
-        } catch (error) {
-            console.error("deleteUser error:", error);
-            return R.internalError(res, error.message);
-        }
-    },
+      // Name requirement:
+      if (!body.full_name && !body.first_name && !body.last_name) {
+        return R.badRequest(
+          res,
+          "Missing required field: full_name OR (first_name + last_name)"
+        );
+      }
+
+      // Normalize & check lengths
+      if (body.full_name) {
+        body.full_name = validate.trimString(body.full_name, "full_name");
+        validate.maxLength(body.full_name, 150, "full_name");
+      }
+      if (body.first_name) validate.maxLength(body.first_name, 100, "first_name");
+      if (body.last_name) validate.maxLength(body.last_name, 100, "last_name");
+
+      if (body.phone) validate.maxLength(body.phone, 20, "phone");
+
+      if (body.role) validate.enum(body.role, USER_ROLES, "role");
+      if (body.status) validate.enum(body.status, USER_STATUS, "status");
+
+      const user = await userService.createUser(body);
+      return R.created(res, user, "User created successfully");
+    } catch (error) {
+      console.error("[userController.create]", error);
+
+      if (error.code === "23505") {
+        return R.conflict(res, "Email already exists");
+      }
+
+      return R.badRequest(res, error.message);
+    }
+  },
+
+  /** PUT /users/:id */
+  async update(req, res) {
+    try {
+      validate.uuid(req.params.id, "id");
+
+      const body = req.body;
+
+      // Optional validations
+      if (body.email != null) {
+        validate.email(body.email);
+        validate.maxLength(body.email, 150, "email");
+      }
+
+      if (body.full_name) {
+        body.full_name = validate.trimString(body.full_name, "full_name");
+        validate.maxLength(body.full_name, 150, "full_name");
+      }
+
+      if (body.first_name) validate.maxLength(body.first_name, 100, "first_name");
+      if (body.last_name) validate.maxLength(body.last_name, 100, "last_name");
+
+      if (body.phone) validate.maxLength(body.phone, 20, "phone");
+
+      if (body.role) validate.enum(body.role, USER_ROLES, "role");
+      if (body.status) validate.enum(body.status, USER_STATUS, "status");
+
+      const user = await userService.updateUser(req.params.id, body);
+
+      return user
+        ? R.ok(res, user, "User updated successfully")
+        : R.notFound(res, "User not found");
+    } catch (error) {
+      console.error("[userController.update]", error);
+      return R.badRequest(res, error.message);
+    }
+  },
+
+  /** DELETE /users/:id */
+  async remove(req, res) {
+    try {
+      validate.uuid(req.params.id, "id");
+
+      const deleted = await userService.deleteUser(req.params.id);
+
+      return deleted
+        ? R.ok(res, { deleted: true }, "User soft deleted successfully")
+        : R.notFound(res, "User not found or already deleted");
+    } catch (error) {
+      console.error("[userController.remove]", error);
+      return R.internalError(res, error.message);
+    }
+  },
 };
 
 export default userController;

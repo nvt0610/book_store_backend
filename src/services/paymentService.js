@@ -241,17 +241,18 @@ const paymentService = {
         try {
             await client.query("BEGIN");
 
+            // 1. Lấy payment PENDING mới nhất
             const { rows: payRows } = await client.query(
                 `
-        SELECT id
-        FROM payments
-        WHERE order_id = $1
-          AND deleted_at IS NULL
-          AND status = 'PENDING'
-        ORDER BY created_at DESC
-        LIMIT 1
-      `,
-                [order_id],
+            SELECT id
+            FROM payments
+            WHERE order_id = $1
+              AND deleted_at IS NULL
+              AND status = 'PENDING'
+            ORDER BY created_at DESC
+            LIMIT 1
+            `,
+                [order_id]
             );
 
             if (!payRows.length) {
@@ -262,29 +263,83 @@ const paymentService = {
 
             const payment_id = payRows[0].id;
 
-            await client.query(
+            // 2. Lấy danh sách các sản phẩm trong order
+            const { rows: items } = await client.query(
                 `
-        UPDATE payments
-        SET status = 'COMPLETED',
-            payment_date = now(),
-            updated_at = now()
-        WHERE id = $1
-          AND deleted_at IS NULL
-      `,
-                [payment_id],
+            SELECT oi.product_id, oi.quantity
+            FROM order_items oi
+            WHERE oi.order_id = $1
+              AND oi.deleted_at IS NULL
+            `,
+                [order_id]
             );
 
+            // 3. VALIDATE tồn kho trước khi trừ
+            for (const it of items) {
+                const { rows: stockRows } = await client.query(
+                    `
+                SELECT stock 
+                FROM products 
+                WHERE id = $1 AND deleted_at IS NULL
+                `,
+                    [it.product_id]
+                );
+
+                if (!stockRows.length) {
+                    throw new Error(`Product ${it.product_id} not found`);
+                }
+
+                const stock = Number(stockRows[0].stock);
+                const qty = Number(it.quantity);
+
+                if (stock < qty) {
+                    const e = new Error(
+                        `Cannot complete order: product ${it.product_id} has only ${stock} units in stock`
+                    );
+                    e.status = 400;
+                    throw e;
+                }
+            }
+
+            // 4. Trừ tồn kho
+            for (const it of items) {
+                await client.query(
+                    `
+                UPDATE products
+                SET stock = stock - $2,
+                    updated_at = now()
+                WHERE id = $1
+                  AND deleted_at IS NULL
+                `,
+                    [it.product_id, it.quantity]
+                );
+            }
+
+            // 5. Cập nhật trạng thái payment → COMPLETED
+            await client.query(
+                `
+            UPDATE payments
+            SET status = 'COMPLETED',
+                payment_date = now(),
+                updated_at = now()
+            WHERE id = $1
+              AND deleted_at IS NULL
+            `,
+                [payment_id]
+            );
+
+            // 6. Cập nhật trạng thái đơn hàng (nếu syncOrder = true)
             if (syncOrder) {
                 await client.query(
                     `
-          UPDATE orders
-          SET status = 'COMPLETED',
-              paid_at = now(),
-              updated_at = now()
-          WHERE id = $1
-            AND deleted_at IS NULL
-        `,
-                    [order_id],
+                UPDATE orders
+                SET status = 'COMPLETED',
+                    paid_at = now(),
+                    updated_at = now()
+                WHERE id = $1
+                  AND deleted_at IS NULL
+                `,
+                    [order_id]
                 );
             }
 

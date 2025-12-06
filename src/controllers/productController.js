@@ -1,6 +1,6 @@
 import productService from "../services/productService.js";
 import responseHelper from "../helpers/responseHelper.js";
-import { validate as isUuid } from "uuid";
+import validate from "../helpers/validateHelper.js";
 
 const R = responseHelper;
 
@@ -10,7 +10,7 @@ const productController = {
       const result = await productService.list(req.query);
       return R.ok(res, result, "Fetched products successfully");
     } catch (err) {
-      console.error("[productsController.list] error:", err);
+      console.error("[productController.list]", err);
       return R.internalError(res, err.message);
     }
   },
@@ -18,38 +18,66 @@ const productController = {
   async getById(req, res) {
     try {
       const { id } = req.params;
-      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID format");
+      validate.uuid(id, "id");
+
       const row = await productService.getById(id, req.query.showDeleted);
-      if (!row) return R.notFound(res, "Product not found");
-      return R.ok(res, row, "Fetched product successfully");
+      return row
+        ? R.ok(res, row, "Fetched product successfully")
+        : R.notFound(res, "Product not found");
     } catch (err) {
-      console.error("[productsController.getById] error:", err);
-      return R.internalError(res, err.message);
+      console.error("[productController.getById]", err);
+      return R.badRequest(res, err.message);
     }
   },
 
   async create(req, res) {
     try {
-      const { name, price, category_id, publisher_id, author_id, stock } = req.body;
+      const body = req.body;
 
-      if (!name) return R.badRequest(res, "Missing required field: name");
-      if (price == null) return R.badRequest(res, "Missing required field: price");
-      if (!isFinite(Number(price))) return R.badRequest(res, "Invalid price");
-      if (Number(price) < 0) return R.badRequest(res, "price must be >= 0");
+      // Required fields
+      validate.required(body.name, "name");
+      validate.required(body.price, "price");
+      validate.required(body.publisher_id, "publisher_id");
+      validate.required(body.author_id, "author_id");
 
-      if (stock != null && (!Number.isInteger(Number(stock)) || Number(stock) < 0)) {
-        return R.badRequest(res, "stock must be an integer >= 0");
+      // Normalize & validate strings
+      body.name = validate.trimString(body.name, "name");
+      validate.maxLength(body.name, 255, "name");
+
+      // Price
+      validate.numeric(body.price, "price");
+      validate.nonNegative(body.price, "price");
+
+      // Stock (optional)
+      if (body.stock != null) {
+        validate.integer(body.stock, "stock");
+        validate.nonNegative(body.stock, "stock");
       }
 
-      for (const fk of ["category_id", "publisher_id", "author_id"]) {
-        if (!req.body[fk]) return R.badRequest(res, `Missing required field: ${fk}`);
-        if (!isUuid(req.body[fk])) return R.badRequest(res, `Invalid UUID format for ${fk}`);
+      // Foreign keys
+      validate.uuid(body.publisher_id, "publisher_id");
+      validate.uuid(body.author_id, "author_id");
+
+      if (body.category_id) {
+        validate.uuid(body.category_id, "category_id");
       }
 
-      const created = await productService.create(req.body);
+      // Optional URL validations
+      if (body.main_image) {
+        validate.url(body.main_image, "main_image");
+      }
+
+      if (body.extra_images) {
+        validate.array(body.extra_images, "extra_images");
+        for (const img of body.extra_images) {
+          validate.url(img, "extra_images[]");
+        }
+      }
+
+      const created = await productService.create(body);
       return R.created(res, created, "Product created successfully");
     } catch (err) {
-      console.error("[productsController.create] error:", err);
+      console.error("[productController.create]", err);
       if (err.status === 409) return R.conflict(res, err.message);
       return R.badRequest(res, err.message);
     }
@@ -58,28 +86,43 @@ const productController = {
   async update(req, res) {
     try {
       const { id } = req.params;
-      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID format");
+      validate.uuid(id, "id");
 
-      const { price, stock, category_id, publisher_id, author_id } = req.body;
+      const body = req.body;
 
-      if (price != null) {
-        if (!isFinite(Number(price))) return R.badRequest(res, "Invalid price");
-        if (Number(price) < 0) return R.badRequest(res, "price must be >= 0");
-      }
-      if (stock != null) {
-        if (!Number.isInteger(Number(stock)) || Number(stock) < 0) {
-          return R.badRequest(res, "stock must be an integer >= 0");
-        }
-      }
-      for (const [fkName, fkVal] of Object.entries({ category_id, publisher_id, author_id })) {
-        if (fkVal != null && !isUuid(fkVal)) return R.badRequest(res, `Invalid UUID format for ${fkName}`);
+      // Optional but validate if provided
+      if (body.name != null) {
+        body.name = validate.trimString(body.name, "name");
+        validate.maxLength(body.name, 255, "name");
       }
 
-      const updated = await productService.update(id, req.body);
-      if (!updated) return R.notFound(res, "Product not found");
-      return R.ok(res, updated, "Product updated successfully");
+      if (body.price != null) {
+        validate.numeric(body.price, "price");
+        validate.nonNegative(body.price, "price");
+      }
+
+      if (body.stock != null) {
+        validate.integer(body.stock, "stock");
+        validate.nonNegative(body.stock, "stock");
+      }
+
+      if (body.category_id != null) validate.uuid(body.category_id, "category_id");
+      if (body.publisher_id != null) validate.uuid(body.publisher_id, "publisher_id");
+      if (body.author_id != null) validate.uuid(body.author_id, "author_id");
+
+      if (body.main_image) validate.url(body.main_image, "main_image");
+
+      if (body.extra_images) {
+        validate.array(body.extra_images, "extra_images");
+        for (const img of body.extra_images) validate.url(img, "extra_images[]");
+      }
+
+      const updated = await productService.update(id, body);
+      return updated
+        ? R.ok(res, updated, "Product updated successfully")
+        : R.notFound(res, "Product not found");
     } catch (err) {
-      console.error("[productsController.update] error:", err);
+      console.error("[productController.update]", err);
       if (err.status === 409) return R.conflict(res, err.message);
       return R.badRequest(res, err.message);
     }
@@ -88,12 +131,15 @@ const productController = {
   async remove(req, res) {
     try {
       const { id } = req.params;
-      if (!isUuid(id)) return R.badRequest(res, "Invalid UUID format");
+      validate.uuid(id, "id");
+
       const deleted = await productService.remove(id);
-      if (!deleted) return R.notFound(res, "Product not found or already deleted");
-      return R.ok(res, { deleted: true }, "Product soft deleted (status=INACTIVE)");
+
+      return deleted
+        ? R.ok(res, { deleted: true }, "Product soft deleted (status=INACTIVE)")
+        : R.notFound(res, "Product not found");
     } catch (err) {
-      console.error("[productsController.remove] error:", err);
+      console.error("[productController.remove]", err);
       return R.internalError(res, err.message);
     }
   },

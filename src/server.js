@@ -11,11 +11,11 @@ import { authJWT } from "./middlewares/jwtAuth.js";
 import { attachRequestContext } from "./middlewares/requestContext.js";
 import { fileURLToPath } from "url";
 import path from "path";
+import config from "./config/env.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config();
 
 const app = express();
 
@@ -28,8 +28,8 @@ app.disable("x-powered-by");
 
 /**
  * Middleware order:
- * 1️⃣ authJWT → decode token, attach req.user
- * 2️⃣ attachRequestContext → push user_id vào ALS
+ * 1️ authJWT → decode token, attach req.user
+ * 2️ attachRequestContext → push user_id vào ALS
  */
 app.use(authJWT);
 app.use(attachRequestContext);
@@ -58,7 +58,7 @@ app.use((req, res, next) => {
 // Global error handler
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 3000;
+const PORT = config.app.port;
 app.listen(PORT, async () => {
   try {
     await db.query("SELECT 1");

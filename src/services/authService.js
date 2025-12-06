@@ -3,10 +3,11 @@ import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
 import passwordHelper from "../helpers/passwordHelper.js";
 import nameHelper from "../helpers/nameHelper.js";
+import config from "../config/env.js";
 
+const ACCESS_TOKEN_TTL = config.jwt.accessTtl;
+const REFRESH_TOKEN_TTL = config.jwt.refreshTtl;
 const { normalizeName } = nameHelper;
-const ACCESS_TOKEN_TTL = "15m";
-const REFRESH_TOKEN_TTL = "7d";
 
 const authService = {
   /** Register a new user */

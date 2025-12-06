@@ -74,8 +74,8 @@ const orderItemService = {
   },
 
   /**
-   * Create new order item
-   */
+  * Create new order item
+  */
   async create(data) {
     if (data.quantity == null || data.quantity <= 0 || data.price == null || data.price < 0) {
       const err = new Error("Invalid quantity or price");
@@ -83,12 +83,49 @@ const orderItemService = {
       throw err;
     }
 
+    // validate order exists + not completed
+    const { rows: orderRows } = await db.query(
+      `SELECT status FROM orders WHERE id = $1 AND deleted_at IS NULL`,
+      [data.order_id]
+    );
+    if (!orderRows.length) {
+      const err = new Error("Order not found");
+      err.status = 404;
+      throw err;
+    }
+    if (orderRows[0].status === "COMPLETED") {
+      const err = new Error("Cannot add items to a completed order");
+      err.status = 400;
+      throw err;
+    }
+
+    // validate product stock
+    const { rows: stockRows } = await db.query(
+      `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
+      [data.product_id]
+    );
+    if (!stockRows.length) {
+      const err = new Error(`Product ${data.product_id} not found`);
+      err.status = 404;
+      throw err;
+    }
+
+    const stock = Number(stockRows[0].stock);
+    if (data.quantity > stock) {
+      const err = new Error(
+        `Product ${data.product_id} has only ${stock} units in stock, cannot order ${data.quantity}`
+      );
+      err.status = 400;
+      throw err;
+    }
+
+    // INSERT
     const id = uuidv4();
     const sql = `
-      INSERT INTO order_items (id, order_id, product_id, quantity, price)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, order_id, product_id, quantity, price, created_at
-    `;
+    INSERT INTO order_items (id, order_id, product_id, quantity, price)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, order_id, product_id, quantity, price, created_at
+  `;
     const { rows } = await db.query(sql, [
       id,
       data.order_id,
@@ -100,38 +137,105 @@ const orderItemService = {
   },
 
   /**
-   * Update existing order item
-   */
+ * Update existing order item
+ */
   async update(id, data) {
+    // 1. Load current item
+    const { rows: curRows } = await db.query(
+      `SELECT order_id, product_id, quantity FROM order_items WHERE id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (!curRows.length) {
+      const err = new Error("Order item not found");
+      err.status = 404;
+      throw err;
+    }
+
+    const current = curRows[0];
+
+    // 2. Load order status
+    const { rows: orderRows } = await db.query(
+      `SELECT status FROM orders WHERE id = $1 AND deleted_at IS NULL`,
+      [current.order_id]
+    );
+    if (!orderRows.length) {
+      const err = new Error("Order not found");
+      err.status = 404;
+      throw err;
+    }
+
+    if (orderRows[0].status === "COMPLETED") {
+      const err = new Error("Cannot update items of a completed order");
+      err.status = 400;
+      throw err;
+    }
+
+    // 3. Validate quantity/price
     if (data.quantity != null && data.quantity <= 0) {
       const err = new Error("Quantity must be greater than 0");
       err.status = 400;
       throw err;
     }
     if (data.price != null && data.price < 0) {
-      const err = new Error("Price must be greater or equal to 0");
+      const err = new Error("Price must be >= 0");
       err.status = 400;
       throw err;
     }
 
+    // 4. Prevent changing product_id in update
+    if (data.product_id && data.product_id !== current.product_id) {
+      const err = new Error("Cannot change product of an existing item");
+      err.status = 400;
+      throw err;
+    }
+
+    // 5. Validate stock if quantity increases
+    if (data.quantity != null) {
+      const newQty = data.quantity;
+      const oldQty = Number(current.quantity);
+
+      // Only check if quantity increases
+      if (newQty > oldQty) {
+        const { rows: stockRows } = await db.query(
+          `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
+          [current.product_id]
+        );
+
+        const stock = Number(stockRows[0].stock);
+        if (!stockRows.length) {
+          const err = new Error(`Product ${current.product_id} not found`);
+          err.status = 404;
+          throw err;
+        }
+        const diff = newQty - oldQty;
+
+        if (diff > stock) {
+          const err = new Error(
+            `Cannot update quantity: increase of ${diff} exceeds available stock (${stock})`
+          );
+          err.status = 400;
+          throw err;
+        }
+      }
+    }
+
+    // 6. Perform UPDATE
     const sql = `
-      UPDATE order_items
-      SET
-        order_id = COALESCE($2, order_id),
-        product_id = COALESCE($3, product_id),
-        quantity = COALESCE($4, quantity),
-        price = COALESCE($5, price),
-        updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id, order_id, product_id, quantity, price, updated_at
-    `;
+    UPDATE order_items
+    SET
+      quantity = COALESCE($2, quantity),
+      price = COALESCE($3, price),
+      updated_at = now()
+    WHERE id = $1 AND deleted_at IS NULL
+    RETURNING id, order_id, product_id, quantity, price, updated_at
+  `;
+
     const { rows } = await db.query(sql, [
       id,
-      data.order_id,
-      data.product_id,
       data.quantity,
       data.price,
     ]);
+
     return rows[0] || null;
   },
 
