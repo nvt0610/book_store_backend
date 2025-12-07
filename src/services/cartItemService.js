@@ -92,6 +92,24 @@ const cartItemService = {
   },
 
   /**
+   * PATCH: ensure cart is ACTIVE
+   */
+  async _ensureActiveCart(cart_id) {
+    const cart = await this._validateCart(cart_id);
+    if (!cart) {
+      const e = new Error("Cart not found");
+      e.status = 404;
+      throw e;
+    }
+    if (cart.status !== "ACTIVE") {
+      const e = new Error("Cannot modify a non-active cart");
+      e.status = 400;
+      throw e;
+    }
+    return cart;
+  },
+
+  /**
    * Validate product exists
    */
   async _validateProduct(product_id) {
@@ -116,12 +134,8 @@ const cartItemService = {
       throw e;
     }
 
-    const cart = await this._validateCart(cart_id);
-    if (!cart) {
-      const e = new Error("Cart not found");
-      e.status = 404;
-      throw e;
-    }
+    // PATCH: ensure cart active
+    await this._ensureActiveCart(cart_id);
 
     const product = await this._validateProduct(product_id);
     if (!product) {
@@ -134,7 +148,7 @@ const cartItemService = {
     const reqQty = Number(quantity);
 
     if (reqQty > stock) {
-      const e = new Error(`Số lượng yêu cầu (${reqQty}) vượt quá tồn kho (${stock})`);
+      const e = new Error(`Requested quantity (${reqQty}) exceeds available stock (${stock})`);
       e.status = 400;
       throw e;
     }
@@ -152,7 +166,7 @@ const cartItemService = {
     if (exists) {
       const newQty = Number(exists.quantity) + Number(quantity);
       if (newQty > stock) {
-        const e = new Error(`Số lượng mới (${newQty}) vượt quá tồn kho (${stock})`);
+        const e = new Error(`New quantity (${newQty}) exceeds available stock (${stock})`);
         e.status = 400;
         throw e;
       }
@@ -187,14 +201,16 @@ const cartItemService = {
       throw e;
     }
 
-    // Lấy product_id để check stock
-    const itemRow = await db.query(
-      `SELECT product_id FROM cart_items WHERE id = $1`,
+    // PATCH: get cart_id first, then check ACTIVE
+    const item = await db.query(
+      `SELECT cart_id, product_id FROM cart_items WHERE id = $1`,
       [itemId]
     );
-    if (!itemRow.rows.length) return null;
+    if (!item.rows.length) return null;
 
-    const product = await this._validateProduct(itemRow.rows[0].product_id);
+    await this._ensureActiveCart(item.rows[0].cart_id);
+
+    const product = await this._validateProduct(item.rows[0].product_id);
     if (!product) {
       const e = new Error("Product not found");
       e.status = 404;
@@ -203,7 +219,7 @@ const cartItemService = {
 
     const stock = Number(product.stock);
     if (Number(quantity) > stock) {
-      const e = new Error(`Số lượng mới (${quantity}) vượt quá tồn kho (${stock})`);
+      const e = new Error(`New quantity (${quantity}) exceeds available stock (${stock})`);
       e.status = 400;
       throw e;
     }
@@ -235,6 +251,12 @@ const cartItemService = {
    * Remove cart item (HARD DELETE)
    */
   async remove(itemId) {
+    // PATCH: ensure cart is ACTIVE
+    const row = await db.query(`SELECT cart_id FROM cart_items WHERE id = $1`, [itemId]);
+    if (row.rows.length) {
+      await this._ensureActiveCart(row.rows[0].cart_id);
+    }
+
     const sql = `
       DELETE FROM cart_items
       WHERE id = $1
@@ -247,6 +269,9 @@ const cartItemService = {
    * Clear entire cart (HARD DELETE)
    */
   async clear(cart_id) {
+    // PATCH: ensure cart active
+    await this._ensureActiveCart(cart_id);
+
     const sql = `
       DELETE FROM cart_items
       WHERE cart_id = $1

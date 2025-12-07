@@ -38,12 +38,15 @@ const categoryController = {
       const { name } = req.body;
 
       validate.required(name, "name");
-      validate.trimString(name, "name");
       validate.maxLength(name, 150, "name");
+
+      if (req.body.description) {
+        req.body.description = validate.trimString(req.body.description, "description");
+        validate.maxLength(req.body.description, 2000, "description");
+      }
 
       const created = await categoryService.create(req.body);
       return R.created(res, created, "Category created successfully");
-
     } catch (err) {
       console.error("[categoryController.create]", err);
       return err.status === 409
@@ -57,11 +60,21 @@ const categoryController = {
     try {
       validate.uuid(req.params.id, "id");
 
+      if (req.body.description) {
+        req.body.description = validate.trimString(req.body.description, "description");
+        validate.maxLength(req.body.description, 2000, "description");
+      }
+
+      if (req.body.name) {
+        validate.maxLength(req.body.name, 150, "name");
+        req.body.name = validate.trimString(req.body.name, "name");
+      }
+
+
       const updated = await categoryService.update(req.params.id, req.body);
       return updated
         ? R.ok(res, updated, "Category updated successfully")
         : R.notFound(res, "Category not found");
-
     } catch (err) {
       console.error("[categoryController.update]", err);
       return err.status === 409

@@ -1,9 +1,4 @@
-/**
- * @module helpers/orderValidationHelper
- * Helper functions for validating user, address, and product data
- * before creating or updating orders.
- */
-
+// src/helpers/validationHelper.js
 import db from "../db/db.js";
 
 /**
@@ -11,18 +6,22 @@ import db from "../db/db.js";
  */
 export async function ensureUserExists(user_id) {
   const sql = `
-    SELECT id
+    SELECT id, role, status
     FROM users
     WHERE id = $1
       AND deleted_at IS NULL
       AND status = 'ACTIVE'
   `;
+
   const { rows } = await db.query(sql, [user_id]);
+
   if (!rows.length) {
-    const error = new Error("User does not exist or is inactive");
-    error.status = 400;
-    throw error;
+    const err = new Error("User does not exist or is inactive");
+    err.status = 400;
+    throw err;
   }
+
+  return rows[0];
 }
 
 /**
@@ -36,11 +35,13 @@ export async function ensureAddressValid(address_id, user_id) {
       AND user_id = $2
       AND deleted_at IS NULL
   `;
+
   const { rows } = await db.query(sql, [address_id, user_id]);
+
   if (!rows.length) {
-    const error = new Error("Invalid address or does not belong to user");
-    error.status = 400;
-    throw error;
+    const err = new Error("Invalid address or does not belong to user");
+    err.status = 400;
+    throw err;
   }
 }
 
@@ -55,10 +56,12 @@ export async function ensureProductValid(product_id) {
       AND deleted_at IS NULL
       AND status = 'ACTIVE'
   `;
+
   const { rows } = await db.query(sql, [product_id]);
+
   if (!rows.length) {
-    const error = new Error("Product not available");
-    error.status = 400;
-    throw error;
+    const err = new Error("Product not available");
+    err.status = 400;
+    throw err;
   }
 }

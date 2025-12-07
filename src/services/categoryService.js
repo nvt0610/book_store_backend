@@ -53,7 +53,7 @@ const categoryService = {
 
     const selectColumns = `
       c.id, c.name, c.description, c.created_at, c.updated_at,
-      COUNT(p.id) AS product_count
+      COUNT(DISTINCT p.id) AS product_count
     `;
 
     const sql = `
@@ -90,7 +90,7 @@ const categoryService = {
     const category = rows[0];
     if (!category) return null;
 
-    // Fetch products in this category
+    // Fetch products in this category (active only)
     const productSql = `
       SELECT id, name, price, stock, created_at, updated_at
       FROM products
@@ -105,9 +105,13 @@ const categoryService = {
   },
 
   /**
-   * Create new category
-   */
+ * Create new category
+ */
   async create(data) {
+    // Normalize
+    if (typeof data.name === "string") data.name = data.name.trim();
+    if (typeof data.description === "string") data.description = data.description.trim();
+
     // Check name uniqueness
     const dup = await db.query(
       "SELECT 1 FROM categories WHERE LOWER(name) = LOWER($1) AND deleted_at IS NULL",
@@ -121,18 +125,22 @@ const categoryService = {
 
     const id = uuidv4();
     const sql = `
-      INSERT INTO categories (id, name, description)
-      VALUES ($1, $2, $3)
-      RETURNING id, name, description, created_at
-    `;
+    INSERT INTO categories (id, name, description)
+    VALUES ($1, $2, $3)
+    RETURNING id, name, description, created_at
+  `;
     const { rows } = await db.query(sql, [id, data.name, data.description]);
     return rows[0];
   },
 
   /**
-   * Update category info (PATCH)
-   */
+ * Update category info (PATCH)
+ */
   async update(id, data) {
+    // Normalize
+    if (typeof data.name === "string") data.name = data.name.trim();
+    if (typeof data.description === "string") data.description = data.description.trim();
+
     // check duplicate name if provided
     if (data.name) {
       const dup = await db.query(
@@ -147,14 +155,14 @@ const categoryService = {
     }
 
     const sql = `
-      UPDATE categories
-      SET
-        name = COALESCE($2, name),
-        description = COALESCE($3, description),
-        updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id, name, description, updated_at
-    `;
+    UPDATE categories
+    SET
+      name = COALESCE($2, name),
+      description = COALESCE($3, description),
+      updated_at = now()
+    WHERE id = $1 AND deleted_at IS NULL
+    RETURNING id, name, description, updated_at
+  `;
     const { rows } = await db.query(sql, [id, data.name, data.description]);
     return rows[0] || null;
   },
@@ -180,6 +188,20 @@ const categoryService = {
  */
   async addProducts(categoryId, product_ids = []) {
     if (!Array.isArray(product_ids) || product_ids.length === 0) return [];
+
+    // Validate product IDs exist
+    const checkExistSql = `
+      SELECT id FROM products
+      WHERE id = ANY($1::uuid[])
+        AND deleted_at IS NULL
+    `;
+    const { rows: existRows } = await db.query(checkExistSql, [product_ids]);
+
+    if (existRows.length !== product_ids.length) {
+      const e = new Error("Some products do not exist or are deleted");
+      e.status = 400;
+      throw e;
+    }
 
     // Skip products that already belong to the same category
     const checkSql = `
@@ -213,6 +235,21 @@ const categoryService = {
   async removeProducts(categoryId, product_ids = []) {
     if (!Array.isArray(product_ids)) product_ids = [product_ids];
     if (product_ids.length === 0) return 0;
+
+    // Validate that products belong to this category
+    const checkSql = `
+      SELECT id FROM products
+      WHERE id = ANY($1::uuid[])
+        AND category_id = $2
+        AND deleted_at IS NULL
+    `;
+    const { rows: validRows } = await db.query(checkSql, [product_ids, categoryId]);
+
+    if (validRows.length === 0) {
+      const e = new Error("No valid products found in this category");
+      e.status = 400;
+      throw e;
+    }
 
     const sql = `
       UPDATE products

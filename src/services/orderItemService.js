@@ -11,6 +11,31 @@ const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildSelectColumns } =
  * Service layer: Order Items CRUD (pure DB logic)
  */
 const orderItemService = {
+
+  async recalcOrderTotal(order_id) {
+    const { rows } = await db.query(
+      `
+      SELECT COALESCE(SUM(quantity * price), 0) AS total
+      FROM order_items
+      WHERE order_id = $1 AND deleted_at IS NULL
+    `,
+      [order_id]
+    );
+
+    const total = Number(rows[0]?.total || 0);
+
+    await db.query(
+      `
+      UPDATE orders
+      SET total_amount = $2, updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+    `,
+      [order_id, total]
+    );
+
+    return total;
+  },
+
   /**
    * List order items with pagination, filters, and soft delete handling
    */
@@ -74,8 +99,8 @@ const orderItemService = {
   },
 
   /**
-  * Create new order item
-  */
+   * Create new order item
+   */
   async create(data) {
     if (data.quantity == null || data.quantity <= 0 || data.price == null || data.price < 0) {
       const err = new Error("Invalid quantity or price");
@@ -122,10 +147,10 @@ const orderItemService = {
     // INSERT
     const id = uuidv4();
     const sql = `
-    INSERT INTO order_items (id, order_id, product_id, quantity, price)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, order_id, product_id, quantity, price, created_at
-  `;
+      INSERT INTO order_items (id, order_id, product_id, quantity, price)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, order_id, product_id, quantity, price, created_at
+    `;
     const { rows } = await db.query(sql, [
       id,
       data.order_id,
@@ -133,12 +158,16 @@ const orderItemService = {
       data.quantity,
       data.price,
     ]);
+
+    // Recalculate order total
+    await recalcOrderTotal(data.order_id);
+
     return rows[0];
   },
 
   /**
- * Update existing order item
- */
+   * Update existing order item
+   */
   async update(id, data) {
     // 1. Load current item
     const { rows: curRows } = await db.query(
@@ -194,19 +223,19 @@ const orderItemService = {
       const newQty = data.quantity;
       const oldQty = Number(current.quantity);
 
-      // Only check if quantity increases
       if (newQty > oldQty) {
         const { rows: stockRows } = await db.query(
           `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
           [current.product_id]
         );
 
-        const stock = Number(stockRows[0].stock);
         if (!stockRows.length) {
           const err = new Error(`Product ${current.product_id} not found`);
           err.status = 404;
           throw err;
         }
+
+        const stock = Number(stockRows[0].stock);
         const diff = newQty - oldQty;
 
         if (diff > stock) {
@@ -221,35 +250,70 @@ const orderItemService = {
 
     // 6. Perform UPDATE
     const sql = `
-    UPDATE order_items
-    SET
-      quantity = COALESCE($2, quantity),
-      price = COALESCE($3, price),
-      updated_at = now()
-    WHERE id = $1 AND deleted_at IS NULL
-    RETURNING id, order_id, product_id, quantity, price, updated_at
-  `;
+      UPDATE order_items
+      SET
+        quantity = COALESCE($2, quantity),
+        price = COALESCE($3, price),
+        updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, order_id, product_id, quantity, price, updated_at
+    `;
 
-    const { rows } = await db.query(sql, [
-      id,
-      data.quantity,
-      data.price,
-    ]);
+    const { rows } = await db.query(sql, [id, data.quantity, data.price]);
+    const updated = rows[0] || null;
 
-    return rows[0] || null;
+    // Recalculate total
+    if (updated) {
+      await recalcOrderTotal(data.order_id);
+    }
+
+    return updated;
   },
 
   /**
    * Soft delete an order item
    */
   async remove(id) {
+    // load order_id first
+    const { rows } = await db.query(
+      `SELECT order_id FROM order_items WHERE id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (!rows.length) return false;
+
+    const order_id = rows[0].order_id;
+
+    const { rows: orderRows } = await db.query(
+      `SELECT status FROM orders WHERE id = $1 AND deleted_at IS NULL`,
+      [order_id]
+    );
+
+    if (!orderRows.length) {
+      const err = new Error("Order not found");
+      err.status = 404;
+      throw err;
+    }
+
+    if (orderRows[0].status === "COMPLETED") {
+      const err = new Error("Cannot delete items of a completed order");
+      err.status = 400;
+      throw err;
+    }
+
     const sql = `
       UPDATE order_items
       SET deleted_at = now(), updated_at = now()
       WHERE id = $1 AND deleted_at IS NULL
     `;
     const { rowCount } = await db.query(sql, [id]);
-    return rowCount > 0;
+
+    // Recalculate total if deleted
+    if (rowCount > 0) {
+      await recalcOrderTotal(data.order_id);
+      return true;
+    }
+
+    return false;
   },
 };
 

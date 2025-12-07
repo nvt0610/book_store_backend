@@ -55,6 +55,7 @@ const addressController = {
         if (body.postal_code) {
           body.postal_code = validate.optionalTrim(body.postal_code);
           validate.maxLength(body.postal_code, 20, "postal_code");
+          validate.postalCode(body.postal_code, "postal_code");
         }
 
         validate.maxLength(body.full_name, 150, "full_name");
@@ -105,6 +106,7 @@ const addressController = {
       if (body.postal_code) {
         body.postal_code = validate.optionalTrim(body.postal_code);
         validate.maxLength(body.postal_code, 20, "postal_code");
+        validate.postalCode(body.postal_code, "postal_code");
       }
 
       const updated = await addressService.update(req.params.id, body);
@@ -114,6 +116,20 @@ const addressController = {
 
     } catch (err) {
       console.error("[addressController.update]", err);
+      return R.internalError(res, err.message);
+    }
+  },
+
+  async setDefault(req, res) {
+    try {
+      validate.uuid(req.params.id, "id");
+
+      const result = await addressService.setDefault(req.params.id);
+
+      return R.ok(res, result, "Default address updated successfully");
+
+    } catch (err) {
+      console.error("[addressController.setDefault]", err);
       return R.internalError(res, err.message);
     }
   },

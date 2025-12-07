@@ -173,6 +173,18 @@ const validateHelper = {
       }
     }
   },
+
+  /* ---------------------------------------------------------------------- */
+  /*  SPECIFIC FIELDS                                                  */
+  /* ---------------------------------------------------------------------- */
+
+  postalCode(value, fieldName = "postal_code") {
+    if (!value) return;
+    if (!/^[0-9]+$/.test(String(value))) {
+      throw new Error(`${fieldName} must contain digits only`);
+    }
+  },
+
 };
 
 export default validateHelper;

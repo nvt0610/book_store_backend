@@ -3,7 +3,6 @@
 import express from "express";
 import addressController from "../controllers/addressController.js";
 import { requireAuth } from "../middlewares/requireAuth.js";
-import { requireRole } from "../middlewares/requireRole.js";
 import { requireOwnerOrAdmin } from "../middlewares/requireOwnerOrAdmin.js";
 
 const router = express.Router();
@@ -15,6 +14,7 @@ router.get("/",  requireAuth, requireOwnerOrAdmin("addresses"), addressControlle
 router.get("/:id", requireAuth, requireOwnerOrAdmin("addresses"), addressController.getById);
 router.post("/", requireAuth, addressController.create);
 router.put("/:id", requireAuth, requireOwnerOrAdmin("addresses"), addressController.update);
+router.patch("/:id/set-default", requireAuth, requireOwnerOrAdmin("addresses"), addressController.setDefault);
 router.delete("/:id", requireAuth, requireOwnerOrAdmin("addresses"), addressController.remove);
 
 export default router;

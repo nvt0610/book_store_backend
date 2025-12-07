@@ -5,7 +5,13 @@ import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildGlobalSearch, buildSelectColumns } = queryHelper;
+const {
+  buildFiltersWhere,
+  mergeWhereParts,
+  buildOrderBy,
+  buildGlobalSearch,
+  buildSelectColumns,
+} = queryHelper;
 
 const productService = {
   async list(queryParams = {}) {
@@ -37,8 +43,16 @@ const productService = {
       alias: "p",
     });
 
-    const softDeleteFilter = buildSoftDeleteScope("p", queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([softDeleteFilter, search, where]);
+    const softDeleteFilter = buildSoftDeleteScope(
+      "p",
+      queryParams.showDeleted || "active",
+    );
+
+    const { whereSql, params } = mergeWhereParts([
+      softDeleteFilter,
+      search,
+      where,
+    ]);
 
     const orderBy =
       buildOrderBy({
@@ -104,11 +118,101 @@ const productService = {
   },
 
   async create(data) {
-    // No unique name check (allowed duplicate titles)
-    if (data.price != null && Number(data.price) < 0) throw new Error("price must be >= 0");
-    if (data.stock != null && Number(data.stock) < 0) throw new Error("stock must be >= 0");
+    // Cho phép trùng tên sách → không check unique
+    let price = 0;
+    if (data.price != null) {
+      price = Number(data.price);
+      if (Number.isNaN(price)) {
+        const e = new Error("price must be a valid number");
+        e.status = 400;
+        throw e;
+      }
+    }
+    if (price < 0) {
+      const e = new Error("price must be >= 0");
+      e.status = 400;
+      throw e;
+    }
+
+    let stock = 0;
+    if (data.stock != null) {
+      stock = Number(data.stock);
+      if (Number.isNaN(stock)) {
+        const e = new Error("stock must be a valid integer");
+        e.status = 400;
+        throw e;
+      }
+      if (stock < 0) {
+        const e = new Error("stock must be >= 0");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    // extra_images: allow empty array [], but forbid null
+    let extraImages = null;
+
+    if ("extra_images" in data) {
+      if (data.extra_images === null) {
+        const e = new Error("extra_images cannot be null. Use [] to clear images.");
+        e.status = 400;
+        throw e;
+      }
+
+      if (!Array.isArray(data.extra_images)) {
+        const e = new Error("extra_images must be an array");
+        e.status = 400;
+        throw e;
+      }
+
+      // FE wants to set empty list → []
+      extraImages = data.extra_images.map((v) => String(v));
+    }
 
     const id = uuidv4();
+
+    // Validate foreign keys
+    // 1. Publisher must exist and not deleted
+    const pub = await db.query(
+      `SELECT id FROM publishers WHERE id = $1 AND deleted_at IS NULL`,
+      [data.publisher_id]
+    );
+    if (pub.rowCount === 0) {
+      const e = new Error("publisher_id does not exist");
+      e.status = 400;
+      throw e;
+    }
+
+    // 2. Author must exist and not deleted
+    const auth = await db.query(
+      `SELECT id FROM authors WHERE id = $1 AND deleted_at IS NULL`,
+      [data.author_id]
+    );
+    if (auth.rowCount === 0) {
+      const e = new Error("author_id does not exist");
+      e.status = 400;
+      throw e;
+    }
+
+    // 3. Category exists (if provided)
+    if (data.category_id) {
+      const cat = await db.query(
+        `SELECT id FROM categories WHERE id = $1 AND deleted_at IS NULL`,
+        [data.category_id]
+      );
+      if (cat.rowCount === 0) {
+        const e = new Error("category_id does not exist");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    // 4. Validate product status
+    if (data.status && !["ACTIVE", "INACTIVE"].includes(data.status)) {
+      const e = new Error("Invalid status value");
+      e.status = 400;
+      throw e;
+    }
 
     const sql = `
       INSERT INTO products (
@@ -132,24 +236,115 @@ const productService = {
       id,
       data.name || null,
       data.description || null,
-      data.price || 0,
-      data.stock || 0,
+      price,
+      stock,
       data.main_image || null,
-      data.extra_images || null,
+      extraImages,
       data.category_id || null,
       data.publisher_id || null,
       data.author_id || null,
       data.status || "ACTIVE",
     ];
 
-    const { rows } = await db.query(sql, params);
-    return rows[0];
+    try {
+      const { rows } = await db.query(sql, params);
+      return rows[0];
+    } catch (err) {
+      throw err;
+    }
   },
 
   async update(id, data) {
-    // No unique name check (allowed duplicate titles)
-    if (data.price != null && Number(data.price) < 0) throw new Error("price must be >= 0");
-    if (data.stock != null && Number(data.stock) < 0) throw new Error("stock must be >= 0");
+    // FK validation
+    if (data.publisher_id) {
+      const pub = await db.query(
+        `SELECT id FROM publishers WHERE id = $1 AND deleted_at IS NULL`,
+        [data.publisher_id]
+      );
+      if (!pub.rowCount) {
+        const e = new Error("publisher_id does not exist");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    if (data.author_id) {
+      const auth = await db.query(
+        `SELECT id FROM authors WHERE id = $1 AND deleted_at IS NULL`,
+        [data.author_id]
+      );
+      if (!auth.rowCount) {
+        const e = new Error("author_id does not exist");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    if (data.category_id) {
+      const cat = await db.query(
+        `SELECT id FROM categories WHERE id = $1 AND deleted_at IS NULL`,
+        [data.category_id]
+      );
+      if (!cat.rowCount) {
+        const e = new Error("category_id does not exist");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    if (data.status && !["ACTIVE", "INACTIVE"].includes(data.status)) {
+      const e = new Error("Invalid status value");
+      e.status = 400;
+      throw e;
+    }
+
+    let price = null;
+    if (data.price != null) {
+      price = Number(data.price);
+      if (Number.isNaN(price)) {
+        const e = new Error("price must be a valid number");
+        e.status = 400;
+        throw e;
+      }
+      if (price < 0) {
+        const e = new Error("price must be >= 0");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    let stock = null;
+    if (data.stock != null) {
+      stock = Number(data.stock);
+      if (Number.isNaN(stock)) {
+        const e = new Error("stock must be a valid integer");
+        e.status = 400;
+        throw e;
+      }
+      if (stock < 0) {
+        const e = new Error("stock must be >= 0");
+        e.status = 400;
+        throw e;
+      }
+    }
+
+    let extraImages = undefined; // undefined → skip update, null → forbidden
+
+    if ("extra_images" in data) {
+      if (data.extra_images === null) {
+        const e = new Error("extra_images cannot be null. Use [] to clear images.");
+        e.status = 400;
+        throw e;
+      }
+
+      if (!Array.isArray(data.extra_images)) {
+        const e = new Error("extra_images must be an array");
+        e.status = 400;
+        throw e;
+      }
+
+      extraImages = data.extra_images.map((v) => String(v)); // may be []
+    }
 
     const sql = `
       UPDATE products
@@ -159,7 +354,7 @@ const productService = {
         price = COALESCE($4, price),
         stock = COALESCE($5, stock),
         main_image = COALESCE($6, main_image),
-        extra_images = COALESCE($7, extra_images),
+        extra_images = CASE WHEN $7 IS NOT NULL THEN $7 ELSE extra_images END,
         category_id = COALESCE($8, category_id),
         publisher_id = COALESCE($9, publisher_id),
         author_id = COALESCE($10, author_id),
@@ -175,20 +370,24 @@ const productService = {
 
     const params = [
       id,
-      data.name,
-      data.description,
-      data.price,
-      data.stock,
-      data.main_image,
-      data.extra_images,
-      data.category_id,
-      data.publisher_id,
-      data.author_id,
-      data.status,
+      data.name ?? null,
+      data.description ?? null,
+      price,
+      stock,
+      data.main_image ?? null,
+      extraImages,
+      data.category_id ?? null,
+      data.publisher_id ?? null,
+      data.author_id ?? null,
+      data.status ?? null,
     ];
 
-    const { rows } = await db.query(sql, params);
-    return rows[0] || null;
+    try {
+      const { rows } = await db.query(sql, params);
+      return rows[0] || null;
+    } catch (err) {
+      throw err;
+    }
   },
 
   async remove(id) {

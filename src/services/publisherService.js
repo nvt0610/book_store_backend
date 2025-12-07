@@ -77,6 +77,8 @@ const publisherService = {
 
   async createPublisher(data) {
     const id = uuidv4();
+
+    // Check duplicate name
     const exists = await db.query(
       "SELECT 1 FROM publishers WHERE LOWER(name) = LOWER($1) AND deleted_at IS NULL",
       [data.name]
@@ -87,19 +89,28 @@ const publisherService = {
       throw err;
     }
 
+    // Normalize optional fields: undefined → null
+    const address = data.address ?? null;
+    const phone = data.phone ?? null;
+    const website = data.website ?? null;
+    const logo_url = data.logo_url ?? null;
+
     const sql = `
-      INSERT INTO publishers (id, name, address, phone, website, logo_url)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, name, address, phone, website, logo_url, created_at
-    `;
-    const { rows } = await db.query(sql, [
+    INSERT INTO publishers (id, name, address, phone, website, logo_url)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, name, address, phone, website, logo_url, created_at
+  `;
+
+    const params = [
       id,
-      data.name,
-      data.address,
-      data.phone,
-      data.website,
-      data.logo_url,
-    ]);
+      data.name,   // required
+      address,     // normalized
+      phone,
+      website,
+      logo_url,
+    ];
+
+    const { rows } = await db.query(sql, params);
     return rows[0];
   },
 
@@ -120,10 +131,10 @@ const publisherService = {
       UPDATE publishers
       SET
         name = COALESCE($2, name),
-        address = COALESCE($3, address),
-        phone = COALESCE($4, phone),
-        website = COALESCE($5, website),
-        logo_url = COALESCE($6, logo_url),
+        address = CASE WHEN $3 IS NOT NULL THEN $3 ELSE address END,
+        phone   = CASE WHEN $4 IS NOT NULL THEN $4 ELSE address END,
+        website = CASE WHEN $5 IS NOT NULL THEN $5 ELSE website END,
+        logo_url = CASE WHEN $6 IS NOT NULL THEN $6 ELSE logo_url END,
         updated_at = now()
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING id, name, address, phone, website, logo_url, updated_at
@@ -140,6 +151,16 @@ const publisherService = {
   },
 
   async deletePublisher(id) {
+    const ref = await db.query(
+      `SELECT id FROM products WHERE publisher_id = $1 AND deleted_at IS NULL LIMIT 1`,
+      [id]
+    );
+    if (ref.rows.length) {
+      const e = new Error("Cannot delete publisher: products are still referencing this publisher");
+      e.status = 400;
+      throw e;
+    }
+
     const sql = `
       UPDATE publishers
       SET deleted_at = now(), updated_at = now()

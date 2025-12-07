@@ -314,7 +314,6 @@ CREATE INDEX idx_soft_delete_authors      ON authors(deleted_at);
 CREATE INDEX idx_soft_delete_publishers   ON publishers(deleted_at);
 CREATE INDEX idx_soft_delete_addresses    ON addresses(deleted_at);
 CREATE INDEX idx_soft_delete_carts        ON carts(deleted_at);
-CREATE INDEX idx_soft_delete_cart_items   ON cart_items(deleted_at);
 CREATE INDEX idx_soft_delete_order_items  ON order_items(deleted_at);
 CREATE INDEX idx_soft_delete_payments     ON payments(deleted_at);
 

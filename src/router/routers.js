@@ -12,6 +12,7 @@ import orderItemRoutes from "./orderItemRoutes.js";
 import paymentRoutes from "./paymentRoutes.js";
 import authRoutes from "./authRoutes.js";
 import uploadRoutes from "./uploadRoutes.js";
+import restoreRoutes from "./restoreRoutes.js";
 
 /**
  * Main router entry point.
@@ -33,6 +34,7 @@ router.use("/order-items", orderItemRoutes);
 router.use("/payments", paymentRoutes);
 router.use("/auth", authRoutes);
 router.use("/upload", uploadRoutes);
+router.use("/restore", restoreRoutes);
 
 // Health check endpoint for quick testing
 router.get("/health", (req, res) => {

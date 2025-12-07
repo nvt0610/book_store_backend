@@ -164,14 +164,47 @@ const paymentService = {
             throw e;
         }
 
+        // Rule 1: Check order status
+        const { rows: orderRows } = await db.query(
+            `SELECT status FROM orders WHERE id = $1 AND deleted_at IS NULL`,
+            [order_id]
+        );
+
+        if (!orderRows.length) {
+            const e = new Error("Order not found");
+            e.status = 404;
+            throw e;
+        }
+
+        if (orderRows[0].status === "COMPLETED") {
+            const e = new Error("Cannot create a payment for a COMPLETED order");
+            e.status = 400;
+            throw e;
+        }
+
+        // Rule 2: Enforce 1–1 (one payment per order)
+        const { rows: existingPay } = await db.query(
+            `SELECT id FROM payments 
+         WHERE order_id = $1 AND deleted_at IS NULL 
+         LIMIT 1`,
+            [order_id]
+        );
+
+        if (existingPay.length) {
+            const e = new Error("Order already has a payment");
+            e.status = 400;
+            throw e;
+        }
+
+        // INSERT payment
         const sql = `
-            INSERT INTO payments (
-                id, order_id, payment_method, amount, status,
-                payment_ref, payment_date
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *
-        `;
+        INSERT INTO payments (
+            id, order_id, payment_method, amount, status,
+            payment_ref, payment_date
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+    `;
 
         const { rows } = await db.query(sql, [
             id,
@@ -190,10 +223,49 @@ const paymentService = {
      * Update payment (status, ref, method, amount, payment_date)
      */
     async updatePayment(id, data) {
-        const fields = [];
-        const params = [id];
+        // Rule 1: cannot set COMPLETED via updatePayment
+        if (data.status === "COMPLETED") {
+            const e = new Error(
+                "Cannot set status to COMPLETED via updatePayment(). Use markPaymentCompletedByOrder()."
+            );
+            e.status = 400;
+            throw e;
+        }
+
+        // Load current payment
+        const { rows: curRows } = await db.query(
+            `SELECT order_id, amount, status FROM payments WHERE id = $1 AND deleted_at IS NULL`,
+            [id]
+        );
+        if (!curRows.length) return null;
+
+        const { order_id, status: currentStatus } = curRows[0];
+
+        // Rule 3: cannot modify payments of a COMPLETED order
+        const { rows: orderRows } = await db.query(
+            `SELECT status FROM orders WHERE id = $1 AND deleted_at IS NULL`,
+            [order_id]
+        );
+        if (orderRows.length && orderRows[0].status === "COMPLETED") {
+            const e = new Error("Cannot modify payment of a COMPLETED order.");
+            e.status = 400;
+            throw e;
+        }
+
+        // Rule 2: cannot modify amount/status of completed payment
+        if (currentStatus === "COMPLETED") {
+            if (data.amount !== undefined || data.status !== undefined) {
+                const e = new Error(
+                    "Cannot modify amount or status of a COMPLETED payment."
+                );
+                e.status = 400;
+                throw e;
+            }
+        }
 
         const allowed = ["payment_method", "amount", "status", "payment_ref", "payment_date"];
+        const fields = [];
+        const params = [id];
 
         for (const key of allowed) {
             if (data[key] !== undefined) {
@@ -207,10 +279,10 @@ const paymentService = {
         }
 
         const sql = `
-      UPDATE payments
-      SET ${fields.join(", ")}, updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING *
+        UPDATE payments
+        SET ${fields.join(", ")}, updated_at = now()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING *
     `;
 
         const { rows } = await db.query(sql, params);
@@ -221,6 +293,20 @@ const paymentService = {
      * Soft delete payment
      */
     async deletePayment(id) {
+        // Load payment status
+        const { rows: payRows } = await db.query(
+            `SELECT status FROM payments WHERE id = $1 AND deleted_at IS NULL`,
+            [id]
+        );
+
+        if (!payRows.length) return false;
+
+        if (payRows[0].status === "COMPLETED") {
+            const e = new Error("Cannot delete a COMPLETED payment");
+            e.status = 400;
+            throw e;
+        }
+
         const sql = `
       UPDATE payments
       SET deleted_at = now(), updated_at = now(), status = 'INACTIVE'

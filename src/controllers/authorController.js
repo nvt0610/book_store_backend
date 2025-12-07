@@ -44,11 +44,17 @@ const authorController = {
         validate.required(name, "name");
         validate.maxLength(name, 150, "name");
 
-        if (photo_url) validate.url(photo_url, "photo_url");
+        if (photo_url) {
+          validate.url(photo_url, "photo_url");
+          validate.maxLength(photo_url, 500, "photo_url");
+        }
 
         req.body.name = validate.trimString(name, "name");
-        if (req.body.biography)
+
+        if (req.body.biography) {
           req.body.biography = validate.trimString(req.body.biography, "biography");
+          validate.maxLength(req.body.biography, 5000, "biography");
+        }
 
       } catch (e) {
         return R.badRequest(res, e.message);
@@ -78,10 +84,12 @@ const authorController = {
 
         if (req.body.photo_url) {
           validate.url(req.body.photo_url, "photo_url");
+          validate.maxLength(req.body.photo_url, 500, "photo_url");
         }
 
         if (req.body.biography) {
           req.body.biography = validate.trimString(req.body.biography, "biography");
+          validate.maxLength(req.body.biography, 5000, "biography");
         }
 
       } catch (e) {

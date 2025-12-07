@@ -283,7 +283,9 @@ const cartService = {
           const stock = Number(prRows[0].stock);
 
           if (updatedQty > stock) {
-            `Cannot merge: total quantity (${updatedQty}) exceeds available stock (${stock})`
+            const e = new Error(
+              `Cannot merge: total quantity (${updatedQty}) exceeds available stock (${stock})`
+            );
             e.status = 400;
             throw e;
           }
@@ -304,7 +306,9 @@ const cartService = {
           const stock2 = Number(pr2Rows[0].stock);
 
           if (qty > stock2) {
-            `Cannot merge: quantity (${qty}) exceeds available stock (${stock2})`
+            const e = new Error(
+              `Cannot merge: quantity (${qty}) exceeds available stock (${stock2})`
+            );
             e.status = 400;
             throw e;
           }
@@ -353,6 +357,26 @@ const cartService = {
    * Create new cart
    */
   async create(data) {
+    // Prevent creating duplicate ACTIVE carts for same user
+    if (data.user_id && (data.status || "ACTIVE") === "ACTIVE") {
+      const check = await db.query(
+        `
+      SELECT id, user_id, status, created_at
+      FROM carts
+      WHERE user_id = $1
+        AND status = 'ACTIVE'
+        AND deleted_at IS NULL
+      LIMIT 1
+      `,
+        [data.user_id]
+      );
+
+      if (check.rowCount > 0) {
+        // Return existed cart instead of throwing 409
+        return check.rows[0];
+      }
+    }
+
     const id = uuidv4();
     const sql = `
       INSERT INTO carts (id, user_id, status)
@@ -367,17 +391,22 @@ const cartService = {
    * Update existing cart
    */
   async update(id, data) {
+    // Hard delete items associated with this cart
+    await db.query(
+      `
+    DELETE FROM cart_items
+    WHERE cart_id = $1
+    `,
+      [id]
+    );
+
     const sql = `
-      UPDATE carts
-      SET
-        user_id = COALESCE($2, user_id),
-        status = COALESCE($3, status),
-        updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-      RETURNING id, user_id, status, updated_at
-    `;
-    const { rows } = await db.query(sql, [id, data.user_id, data.status]);
-    return rows[0] || null;
+    UPDATE carts
+    SET deleted_at = now(), updated_at = now(), status = 'INACTIVE'
+    WHERE id = $1 AND deleted_at IS NULL
+  `;
+    const { rowCount } = await db.query(sql, [id]);
+    return rowCount > 0;
   },
 
   /**

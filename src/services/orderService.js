@@ -4,7 +4,7 @@ import paginationHelper from "../helpers/paginationHelper.js";
 import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 import { getRequestContext } from "../middlewares/requestContext.js";
-import { ensureAddressValid, ensureProductValid, ensureUserExists, } from "../helpers/orderValidationHelper.js";
+import { ensureAddressValid, ensureProductValid, ensureUserExists } from "../helpers/inputValidator.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
 const { buildFiltersWhere, mergeWhereParts, buildOrderBy } = queryHelper;

@@ -103,6 +103,18 @@ const authorService = {
   },
 
   async deleteAuthor(id) {
+    // Prevent delete if referenced by products
+    const ref = await db.query(
+      `SELECT id FROM products WHERE author_id = $1 AND deleted_at IS NULL LIMIT 1`,
+      [id]
+    );
+
+    if (ref.rows.length) {
+      const e = new Error("Cannot delete author: products are still referencing this author");
+      e.status = 400;
+      throw e;
+    }
+
     const sql = `
       UPDATE authors
       SET deleted_at = now(), updated_at = now()
