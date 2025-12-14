@@ -87,23 +87,24 @@ const vnpayController = {
   async returnUrl(req, res) {
     try {
       const verify = verifyVnpayReturn(req.query, vnpayConfig.hashSecret);
-
       if (!verify.ok) {
-        const redirectUrl = new URL("/checkout", env.app.frontendUrl);
-        redirectUrl.searchParams.set("success", "0");
-        redirectUrl.searchParams.set("code", "INVALID_SIGNATURE");
-        return res.redirect(redirectUrl.toString());
+        return res.redirect(
+          `${env.app.frontendUrl}/checkout/result?success=0&code=INVALID_SIGNATURE`
+        );
       }
 
       await vnpayService.maybeCompleteFromReturn(req.query);
 
-      const result = vnpayService.buildReturnResult(req.query);
+      const result = await vnpayService.buildReturnResult(req.query);
 
       const redirectUrl = new URL("/checkout/result", env.app.frontendUrl);
 
       redirectUrl.searchParams.set("success", result.success ? "1" : "0");
       redirectUrl.searchParams.set("code", result.code);
-      redirectUrl.searchParams.set("payment_id", result.payment_id);
+      if (result.payment_id)
+        redirectUrl.searchParams.set("payment_id", result.payment_id);
+      if (result.order_id)
+        redirectUrl.searchParams.set("order_id", result.order_id);
 
       return res.redirect(redirectUrl.toString());
     } catch (err) {

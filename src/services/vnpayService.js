@@ -272,14 +272,26 @@ const vnpayService = {
    * Handle ReturnURL (browser redirect).
    * We only verify & return a UI-friendly result, no DB update required.
    */
-  buildReturnResult(vnpQuery) {
+  async buildReturnResult(vnpQuery) {
     const ok = isVnpaySuccess(vnpQuery);
+
+    const paymentId = String(vnpQuery.vnp_TxnRef || "");
+    let orderId = null;
+
+    if (paymentId) {
+      const { rows } = await db.query(
+        `SELECT order_id FROM payments WHERE id = $1`,
+        [paymentId]
+      );
+      orderId = rows[0]?.order_id ?? null;
+    }
+
     return {
       success: ok,
       code: String(vnpQuery.vnp_ResponseCode || ""),
       transactionStatus: String(vnpQuery.vnp_TransactionStatus || ""),
-      payment_id: String(vnpQuery.vnp_TxnRef || ""),
-      orderInfo: String(vnpQuery.vnp_OrderInfo || ""),
+      payment_id: paymentId,
+      order_id: orderId,
     };
   },
 
