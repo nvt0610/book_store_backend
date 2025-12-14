@@ -3,10 +3,13 @@ import validate from "../helpers/validateHelper.js";
 
 import vnpayConfig from "../integrations/vnpay.config.js";
 import { verifyVnpayReturn } from "../integrations/vnpay.helper.js";
+import { isAllowedVnpayIp } from "../integrations/vnpay.security.js";
 import vnpayService from "../services/vnpayService.js";
 import env from "../config/env.js";
 
 const R = responseHelper;
+
+const ALLOWED_LOCALES = ["vn", "en"];
 
 const vnpayController = {
   /**
@@ -17,9 +20,18 @@ const vnpayController = {
     try {
       const { order_id, bankCode, locale } = req.body || {};
 
+      // required
       validate.uuid(order_id, "order_id");
-      if (bankCode) validate.trimString(bankCode, "bankCode");
-      if (locale) validate.trimString(locale, "locale");
+
+      // optional
+      if (bankCode) {
+        validate.trimString(bankCode, "bankCode");
+      }
+
+      if (locale) {
+        validate.trimString(locale, "locale");
+        validate.enum(locale, ALLOWED_LOCALES, "locale");
+      }
 
       const result = await vnpayService.createPaymentUrl(
         { order_id, bankCode, locale },
@@ -39,23 +51,38 @@ const vnpayController = {
    */
   async ipn(req, res) {
     try {
-      const verify = verifyVnpayReturn(req.query, vnpayConfig.hashSecret);
-      if (!verify.ok) {
-        return res.json({ RspCode: "97", Message: "Invalid signature" });
+      // 1. IP whitelist (server-to-server)
+      if (!isAllowedVnpayIp(req)) {
+        return res.json({
+          RspCode: "97",
+          Message: "Invalid IP address",
+        });
       }
 
+      // 2. Signature verify
+      const verify = verifyVnpayReturn(req.query, vnpayConfig.hashSecret);
+      if (!verify.ok) {
+        return res.json({
+          RspCode: "97",
+          Message: "Invalid signature",
+        });
+      }
+
+      // 3. Business logic
       const result = await vnpayService.handleIpn(req.query);
       return res.json(result);
     } catch (err) {
       console.error("[vnpayController.ipn]", err);
-      return res.json({ RspCode: "99", Message: "Unknow error" });
+      return res.json({
+        RspCode: "99",
+        Message: "Unknown error",
+      });
     }
   },
 
   /**
    * GET /api/vnpay/return
-   * Browser redirect; verify signature and show result (no DB update).
-   * If you later have FE domain, you can redirect there.
+   * Browser redirect; UI only, no DB update.
    */
   async returnUrl(req, res) {
     try {
@@ -69,10 +96,15 @@ const vnpayController = {
 
       const result = vnpayService.buildReturnResult(req.query);
 
-      const feBase = env.app.frontendUrl;
-      const redirectUrl = new URL("/checkout/result", feBase);
+      const redirectUrl = new URL(
+        "/checkout/result",
+        env.app.frontendUrl
+      );
 
-      redirectUrl.searchParams.set("success", result.success ? "1" : "0");
+      redirectUrl.searchParams.set(
+        "success",
+        result.success ? "1" : "0"
+      );
       redirectUrl.searchParams.set("code", result.code);
       redirectUrl.searchParams.set("payment_id", result.payment_id);
 

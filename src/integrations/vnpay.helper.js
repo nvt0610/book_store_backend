@@ -85,18 +85,7 @@ export function buildPaymentUrl(paymentUrlBase, params, hashSecret) {
 }
 
 export function verifyVnpayReturn(req, hashSecret) {
-  const rawQuery = req.originalUrl.split("?")[1];
-  if (!rawQuery) {
-    return { ok: false, reason: "Missing query string" };
-  }
-
-  const params = {};
-  rawQuery.split("&").forEach((pair) => {
-    const [key, value] = pair.split("=");
-    if (key && key.startsWith("vnp_")) {
-      params[key] = value;
-    }
-  });
+  const params = { ...req.query };
 
   const receivedHash = params.vnp_SecureHash;
   if (!receivedHash) {
@@ -106,31 +95,27 @@ export function verifyVnpayReturn(req, hashSecret) {
   delete params.vnp_SecureHash;
   delete params.vnp_SecureHashType;
 
-  // Sort key ASC
-  const signData = Object.keys(params)
+  const sortedParams = Object.keys(params)
+    .filter((k) => k.startsWith("vnp_"))
     .sort()
-    .map((k) => `${k}=${params[k]}`)
-    .join("&");
+    .reduce((acc, k) => {
+      acc[k] = params[k];
+      return acc;
+    }, {});
+
+  const signData = qs.stringify(sortedParams, {
+    encode: true,
+    format: "RFC1738",
+  });
 
   const calculatedHash = crypto
     .createHmac("sha512", hashSecret)
-    .update(signData, "utf-8")
+    .update(signData)
     .digest("hex");
 
-  const ok =
-    calculatedHash.toLowerCase() === receivedHash.toLowerCase();
-
-  return ok
+  return calculatedHash === receivedHash
     ? { ok: true }
-    : {
-        ok: false,
-        reason: "Invalid signature",
-        debug: {
-          signData,
-          calculatedHash,
-          receivedHash,
-        },
-      };
+    : { ok: false, reason: "Invalid signature" };
 }
 
 export function getClientIp(req) {
