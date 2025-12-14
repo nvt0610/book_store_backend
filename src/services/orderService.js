@@ -279,16 +279,7 @@ const orderService = {
         throw new Error("Selected cart items not found");
       }
 
-      // 4. Deduct stock (atomic, e-commerce safe)
-      for (const it of items) {
-        await inventoryService.deductStockOrFail(
-          client,
-          it.product_id,
-          it.quantity
-        );
-      }
-
-      // 5. Snapshot
+      // 4. Snapshot
       const snapshot = items.map((it) => ({
         product_id: it.product_id,
         quantity: Math.max(1, Number(it.quantity)),
@@ -297,7 +288,7 @@ const orderService = {
 
       const order_id = uuidv4();
 
-      // 6. Create order
+      // 5. Create order
       const { rows: orderRows } = await client.query(
         `
         INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
@@ -319,7 +310,7 @@ const orderService = {
         [order_id, cart.user_id, address_id, item_ids]
       );
 
-      // 7. Create order items
+      // 6. Create order items
       for (const it of snapshot) {
         await client.query(
           `
@@ -330,7 +321,7 @@ const orderService = {
         );
       }
 
-      // 8. Create payment
+      // 7. Create payment
       await client.query(
         `
         INSERT INTO payments (id, order_id, payment_method, amount, status)
@@ -339,7 +330,7 @@ const orderService = {
         [uuidv4(), order_id, payment_method, orderRows[0].total_amount]
       );
 
-      // 9. REMOVE ONLY CHECKED-OUT ITEMS
+      // 8. REMOVE ONLY CHECKED-OUT ITEMS
       await client.query(
         `
       DELETE FROM cart_items
@@ -381,10 +372,7 @@ const orderService = {
       // 3. Normalize quantity
       const qty = Math.max(1, parseInt(quantity, 10));
 
-      // 4. Atomic stock deduction (e-commerce safe)
-      await inventoryService.deductStockOrFail(client, product_id, qty);
-
-      // 5. Load price
+      // 4. Load price
       const { rows: pr } = await client.query(
         `
       SELECT price
@@ -400,7 +388,7 @@ const orderService = {
 
       const order_id = uuidv4();
 
-      // 6. Create order
+      // 5. Create order
       const { rows: orderRows } = await client.query(
         `
       INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
@@ -410,7 +398,7 @@ const orderService = {
         [order_id, user_id, address_id, total]
       );
 
-      // 7. Insert order item
+      // 6. Insert order item
       await client.query(
         `
       INSERT INTO order_items (id, order_id, product_id, quantity, price)
@@ -419,7 +407,7 @@ const orderService = {
         [uuidv4(), order_id, product_id, qty, price]
       );
 
-      // 8. Create payment
+      // 7. Create payment
       await client.query(
         `
       INSERT INTO payments (id, order_id, payment_method, amount, status)
@@ -464,9 +452,6 @@ const orderService = {
         await ensureProductValid(it.product_id);
 
         const qty = Math.max(1, parseInt(it.quantity ?? 1, 10));
-
-        // Atomic stock deduction
-        await inventoryService.deductStockOrFail(client, it.product_id, qty);
 
         let price = it.price;
 
@@ -576,7 +561,7 @@ const orderService = {
     if (data.status) {
       if (data.status === "COMPLETED") {
         const err = new Error(
-          "Use paymentService.markPaymentCompletedByOrder() to complete order"
+          "Use paymentService.completeOrderPayment() to complete order"
         );
         err.status = 400;
         throw err;

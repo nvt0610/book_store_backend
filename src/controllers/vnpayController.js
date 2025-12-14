@@ -58,48 +58,21 @@ const vnpayController = {
    */
   async returnUrl(req, res) {
     try {
-      const verify = verifyVnpayReturn(req, vnpayConfig.hashSecret);
-
+      const verify = verifyVnpayReturn(req.query, vnpayConfig.hashSecret);
       if (!verify.ok) {
-        console.error("[VNPAY] Invalid signature", verify.debug);
         return res.status(400).send("Invalid signature");
       }
 
       const result = vnpayService.buildReturnResult(req.query);
 
-      // ==========================
-      // Redirect FE
-      // ==========================
-      const redirectBase = process.env.VNPAY_RETURN_REDIRECT_URL;
-      if (redirectBase) {
-        const url = new URL(redirectBase);
-        url.searchParams.set("success", result.success ? "1" : "0");
-        url.searchParams.set("code", result.code);
-        url.searchParams.set("payment_id", result.payment_id);
-        return res.redirect(url.toString());
-      }
+      const feBase = process.env.FRONTEND_PUBLIC_URL || "http://localhost:5173";
+      const redirectUrl = new URL("/checkout", feBase);
 
-      // ==========================
-      // Fallback HTML (DEV)
-      // ==========================
-      const msg = result.success
-        ? "Giao dịch thành công"
-        : "Giao dịch không thành công";
+      redirectUrl.searchParams.set("success", result.success ? "1" : "0");
+      redirectUrl.searchParams.set("code", result.code);
+      redirectUrl.searchParams.set("payment_id", result.payment_id);
 
-      return res.send(`
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>VNPAY Return</title>
-        </head>
-        <body style="font-family: Arial; padding: 24px;">
-          <h2>${msg}</h2>
-          <p><b>ResponseCode:</b> ${result.code}</p>
-          <p><b>TxnRef (payment_id):</b> ${result.payment_id}</p>
-          <p><b>OrderInfo:</b> ${result.orderInfo}</p>
-        </body>
-      </html>
-    `);
+      return res.redirect(redirectUrl.toString());
     } catch (err) {
       console.error("[vnpayController.returnUrl]", err);
       return res.status(500).send("Server error");

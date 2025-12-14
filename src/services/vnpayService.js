@@ -161,11 +161,15 @@ const vnpayService = {
   },
 
   /**
-   * Handle IPN callback (server-to-server).
-   * - Verify signature
-   * - Validate payment + amount
-   * - Idempotent finalize: update payments + orders
-   * - Return RspCode/Message per VNPAY docs
+   * Handle VNPAY IPN callback.
+   *
+   * Responsibilities:
+   * - Verify transaction validity (amount, signature already verified outside)
+   * - Ensure idempotency
+   * - Delegate order finalization to paymentService.completeOrderPayment
+   *
+   * @param {Object} vnpQuery
+   * @returns {Object} VNPAY response
    */
   async handleIpn(vnpQuery) {
     const payload = mapVnpayToGatewayPayload(vnpQuery);
@@ -175,17 +179,16 @@ const vnpayService = {
       return { RspCode: "01", Message: "Order not found" };
     }
 
-    // Load payment + order
+    // 1. Load payment and order
     const { rows } = await db.query(
       `
-      SELECT p.id, p.order_id, p.amount, p.status, p.deleted_at,
-             o.status AS order_status
-      FROM payments p
-      JOIN orders o ON o.id = p.order_id AND o.deleted_at IS NULL
-      WHERE p.id = $1
-        AND p.deleted_at IS NULL
-      LIMIT 1
-      `,
+    SELECT p.id, p.order_id, p.amount, p.status
+    FROM payments p
+    JOIN orders o ON o.id = p.order_id AND o.deleted_at IS NULL
+    WHERE p.id = $1
+      AND p.deleted_at IS NULL
+    LIMIT 1
+    `,
       [paymentId]
     );
 
@@ -195,71 +198,64 @@ const vnpayService = {
 
     const pay = rows[0];
 
-    // Amount check (integer cents)
-    const vnpAmount = Number(vnpQuery.vnp_Amount || 0); // already *100
+    // 2. Amount validation (VNPAY amount is multiplied by 100)
+    const vnpAmount = Number(vnpQuery.vnp_Amount || 0);
     const localAmount = Math.round(Number(pay.amount) * 100);
+
     if (!Number.isFinite(vnpAmount) || vnpAmount !== localAmount) {
-      return { RspCode: "04", Message: "invalid amount" };
+      return { RspCode: "04", Message: "Invalid amount" };
     }
 
-    // Idempotency: if already completed, confirm success
+    // 3. Idempotency
     if (pay.status === "COMPLETED") {
       return { RspCode: "02", Message: "Order already confirmed" };
     }
 
-    // Finalize in transaction
+    // 4. Process transaction
     const client = await db.getClient();
     try {
       await client.query("BEGIN");
 
       const ok = isVnpaySuccess(vnpQuery);
-      const newPayStatus = ok ? "COMPLETED" : "INACTIVE";
 
-      // Update payment gateway fields
-      await client.query(
-        `
+      if (!ok) {
+        await client.query(
+          `
         UPDATE payments
-        SET
-          status = $2,
-          payment_date = CASE WHEN $2 = 'COMPLETED' THEN now() ELSE payment_date END,
-          gateway = 'VNPAY',
-          gateway_response_code = $3,
-          gateway_payload = $4::jsonb,
-          payment_ref = COALESCE(payment_ref, $1),
-          updated_at = now()
+        SET status = 'INACTIVE',
+            gateway = 'VNPAY',
+            gateway_response_code = $2,
+            gateway_payload = $3::jsonb,
+            updated_at = now()
         WHERE id = $1
           AND deleted_at IS NULL
         `,
-        [
-          pay.id,
-          newPayStatus,
-          String(vnpQuery.vnp_ResponseCode || ""),
-          JSON.stringify(payload),
-        ]
-      );
-
-      // If success -> mark order completed (NO STOCK DEDUCT HERE)
-      if (ok) {
-        await client.query(
-          `
-          UPDATE orders
-          SET
-            status = 'COMPLETED',
-            paid_at = now(),
-            updated_at = now()
-          WHERE id = $1
-            AND deleted_at IS NULL
-            AND status = 'PENDING'
-          `,
-          [pay.order_id]
+          [
+            pay.id,
+            String(vnpQuery.vnp_ResponseCode || ""),
+            JSON.stringify(payload),
+          ]
         );
+
+        await client.query("COMMIT");
+        return {
+          RspCode: "00",
+          Message: "Payment failed, order not completed",
+        };
       }
+
+      // Success: delegate to unified completion logic
+      await paymentService.completeOrderPayment(
+        pay.order_id,
+        { via: "GATEWAY", gateway: "VNPAY" },
+        client
+      );
 
       await client.query("COMMIT");
       return { RspCode: "00", Message: "Confirm Success" };
     } catch (e) {
       await client.query("ROLLBACK");
-      return { RspCode: "99", Message: "Unknow error" };
+      return { RspCode: "99", Message: "Unknown error" };
     } finally {
       client.release();
     }

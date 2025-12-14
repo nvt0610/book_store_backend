@@ -120,7 +120,7 @@ const paymentController = {
       const { order_id } = req.params;
       validate.uuid(order_id, "order_id");
 
-      const data = await paymentService.markPaymentCompletedByOrder(order_id);
+      const data = await paymentService.completeOrderPayment(order_id);
       return R.ok(res, data, "Payment marked as completed");
     } catch (err) {
       console.error("[paymentController.markCompletedByOrder]", err);
