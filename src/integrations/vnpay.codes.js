@@ -24,8 +24,8 @@ export const VNPAY_TRANSACTION_STATUS = {
  * Các trạng thái được coi là thanh toán THÀNH CÔNG
  */
 export const VNPAY_SUCCESS_STATUS = {
-  RESPONSE_CODE: ["00"],
-  TRANSACTION_STATUS: ["00"],
+  RESPONSE_CODE: new Set(["00"]),
+  TRANSACTION_STATUS: new Set(["00"]),
 };
 
 /**

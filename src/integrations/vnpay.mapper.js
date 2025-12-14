@@ -15,13 +15,12 @@ export function parseVnpPayDate(vnpPayDate) {
   return vnpPayDate || null;
 }
 
-export function isVnpaySuccess(vnpQuery) {
+export function isVnpaySuccess(vnpQuery = {}) {
+  const responseCode = String(vnpQuery.vnp_ResponseCode || "");
+  const transactionStatus = String(vnpQuery.vnp_TransactionStatus || "");
+
   return (
-    VNPAY_SUCCESS_STATUS.RESPONSE_CODE.includes(
-      String(vnpQuery.vnp_ResponseCode)
-    ) &&
-    VNPAY_SUCCESS_STATUS.TRANSACTION_STATUS.includes(
-      String(vnpQuery.vnp_TransactionStatus)
-    )
+    VNPAY_SUCCESS_STATUS.RESPONSE_CODE.has(responseCode) &&
+    VNPAY_SUCCESS_STATUS.TRANSACTION_STATUS.has(transactionStatus)
   );
 }

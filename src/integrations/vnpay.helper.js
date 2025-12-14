@@ -120,6 +120,11 @@ export function verifyVnpayReturn(query, hashSecret) {
       return acc;
     }, {});
 
+  if (!sortedParams.vnp_TxnRef || !sortedParams.vnp_Amount) {
+    console.error("[VNPAY VERIFY] Missing required fields", sortedParams);
+    return { ok: false, reason: "Missing required fields" };
+  }
+
   /**
    * CRITICAL:
    * - Use RFC1738 encoding

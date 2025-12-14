@@ -229,7 +229,6 @@ const vnpayService = {
     try {
       await client.query("BEGIN");
 
-      const ok = isVnpaySuccess(vnpQuery);
       const isSuccess = isVnpaySuccess(vnpQuery);
 
       if (!isSuccess) {
