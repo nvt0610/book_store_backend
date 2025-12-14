@@ -50,8 +50,8 @@ const validateHelper = {
   },
 
   minLength(value, min, fieldName) {
-    if (value && String(value).length <= min) {
-      throw new Error(`${fieldName} must be <= ${min} characters`);
+    if (value && String(value).length < min) {
+      throw new Error(`${fieldName} must be at least ${min} characters`);
     }
   },
 
