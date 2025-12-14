@@ -19,11 +19,6 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-app.use((req, res, next) => {
-  console.log(">>> INCOMING:", req.method, req.originalUrl);
-  next();
-});
-
 app.use(cors());
 app.use(helmet());
 app.use(compression());
