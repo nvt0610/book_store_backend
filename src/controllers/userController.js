@@ -74,7 +74,8 @@ const userController = {
         body.full_name = validate.trimString(body.full_name, "full_name");
         validate.maxLength(body.full_name, 150, "full_name");
       }
-      if (body.first_name) validate.maxLength(body.first_name, 100, "first_name");
+      if (body.first_name)
+        validate.maxLength(body.first_name, 100, "first_name");
       if (body.last_name) validate.maxLength(body.last_name, 100, "last_name");
 
       if (body.phone) validate.maxLength(body.phone, 20, "phone");
@@ -113,8 +114,14 @@ const userController = {
         validate.maxLength(body.full_name, 150, "full_name");
       }
 
-      if (body.first_name) validate.maxLength(body.first_name, 100, "first_name");
+      if (body.first_name)
+        validate.maxLength(body.first_name, 100, "first_name");
+
       if (body.last_name) validate.maxLength(body.last_name, 100, "last_name");
+
+      if (body.password) {
+        validate.minLength(body.password, 6, "password");
+      }
 
       if (body.phone) validate.maxLength(body.phone, 20, "phone");
 
@@ -148,6 +155,27 @@ const userController = {
         : R.notFound(res, "User not found");
     } catch (error) {
       console.error("[userController.setStatus]", error);
+      return R.badRequest(res, error.message);
+    }
+  },
+
+  async changeMyPassword(req, res) {
+    try {
+      const userId = req.user.id;
+      const { current_password, new_password } = req.body;
+
+      validate.required(current_password, "current_password");
+      validate.required(new_password, "new_password");
+      validate.minLength(new_password, 6, "new_password");
+
+      await userService.changeMyPassword(userId, {
+        current_password,
+        new_password,
+      });
+
+      return R.ok(res, { success: true }, "Password changed successfully");
+    } catch (error) {
+      console.error("[userController.changeMyPassword]", error);
       return R.badRequest(res, error.message);
     }
   },

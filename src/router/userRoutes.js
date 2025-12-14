@@ -16,6 +16,13 @@ router.patch(
   requireSelfOrAdmin("id"),
   userController.setStatus
 );
+
+router.post(
+  "/me/change-password",
+  requireAuth,
+  userController.changeMyPassword
+);
+
 router.use(requireRole("ADMIN"));
 
 router.get("/", userController.list);

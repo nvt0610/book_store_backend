@@ -131,37 +131,83 @@ const orderService = {
   },
 
   /**
-   * Get single order with its order items
+   * Get single order with items and embedded product info
+   * Ecommerce best practice: avoid N+1 queries and return product snapshot
    */
   async getOrderById(id, showDeleted = "active") {
     const softDeleteFilter = buildSoftDeleteScope("o", showDeleted);
-    const sql = `
+
+    // 1. Load order
+    const orderSql = `
       SELECT 
-        o.id, o.user_id, o.address_id, o.total_amount, o.status,
-        o.placed_at, o.paid_at, o.created_at, o.updated_at, o.deleted_at
+        o.id,
+        o.user_id,
+        o.address_id,
+        o.total_amount,
+        o.status,
+        o.placed_at,
+        o.paid_at,
+        o.created_at,
+        o.updated_at,
+        o.deleted_at
       FROM orders o
-      WHERE o.id = $1 ${
-        softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""
-      }
-    `;
-    const { rows } = await db.query(sql, [id]);
+      WHERE o.id = $1
+      ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
+  `;
+    const { rows } = await db.query(orderSql, [id]);
     const order = rows[0];
     if (!order) return null;
 
+    // 2. Load order items with product info (JOIN)
     const itemsSql = `
-      SELECT 
-        oi.id, oi.product_id, oi.quantity, oi.price, oi.created_at, oi.updated_at
+      SELECT
+        oi.id,
+        oi.quantity,
+        oi.price,
+        oi.created_at,
+        oi.updated_at,
+
+        -- Embedded product info (snapshot for display)
+        p.id          AS product_id,
+        p.name        AS product_name,
+        p.main_image  AS product_image,
+        p.price       AS product_price
       FROM order_items oi
-      WHERE oi.order_id = $1 AND oi.deleted_at IS NULL
+      JOIN products p
+        ON p.id = oi.product_id
+      AND p.deleted_at IS NULL
+      WHERE oi.order_id = $1
+        AND oi.deleted_at IS NULL
       ORDER BY oi.created_at ASC
     `;
-    const { rows: items } = await db.query(itemsSql, [id]);
-    order.items = items;
+    const { rows: itemRows } = await db.query(itemsSql, [id]);
 
+    order.items = itemRows.map((r) => ({
+      id: r.id,
+      quantity: r.quantity,
+      price: r.price,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+      product: {
+        id: r.product_id,
+        name: r.product_name,
+        main_image: r.product_image,
+        price: r.product_price,
+      },
+    }));
+
+    // 3. Load latest payment
     const paymentSql = `
-      SELECT id, payment_method, amount, status, payment_ref, payment_date
+      SELECT
+        id,
+        payment_method,
+        amount,
+        status,
+        payment_ref,
+        payment_date
       FROM payments
-      WHERE order_id = $1 AND deleted_at IS NULL
+      WHERE order_id = $1
+        AND deleted_at IS NULL
       ORDER BY created_at DESC
       LIMIT 1
     `;

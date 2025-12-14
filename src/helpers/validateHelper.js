@@ -49,6 +49,12 @@ const validateHelper = {
     }
   },
 
+  minLength(value, min, fieldName) {
+    if (value && String(value).length <= min) {
+      throw new Error(`${fieldName} must be <= ${min} characters`);
+    }
+  },
+
   /* ---------------------------------------------------------------------- */
   /*  UUID VALIDATION                                                       */
   /* ---------------------------------------------------------------------- */
