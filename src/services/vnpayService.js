@@ -41,13 +41,13 @@ const vnpayService = {
 
       const { rows: orderRows } = await client.query(
         `
-      SELECT o.id, o.user_id, o.total_amount, o.status
-      FROM orders o
-      WHERE o.id = $1
-        AND o.deleted_at IS NULL
-        ${ownerSql}
-      FOR UPDATE
-      `,
+        SELECT o.id, o.user_id, o.total_amount, o.status
+        FROM orders o
+        WHERE o.id = $1
+          AND o.deleted_at IS NULL
+          ${ownerSql}
+        FOR UPDATE
+        `,
         orderParams
       );
 
@@ -65,35 +65,30 @@ const vnpayService = {
         throw e;
       }
 
-      // 2. Find latest VNPAY payment attempt for this order
-      const { rows: payRows } = await client.query(
+      // 2. Check if order already completed via any payment
+      const { rows: completed } = await client.query(
         `
-      SELECT id, amount, status
-      FROM payments
-      WHERE order_id = $1
-        AND deleted_at IS NULL
-        AND payment_method = 'VNPAY'
-      ORDER BY created_at DESC
-      LIMIT 1
-      `,
+        SELECT 1
+        FROM payments
+        WHERE order_id = $1
+          AND status = 'COMPLETED'
+          AND deleted_at IS NULL
+        LIMIT 1
+        `,
         [order_id]
       );
 
-      let payment = payRows[0] || null;
-
-      // If order already has a completed VNPAY payment, block retry
-      if (payment && payment.status === "COMPLETED") {
+      if (completed.length) {
         const e = new Error("Order already paid");
         e.status = 400;
         throw e;
       }
 
-      // 3. Create new payment attempt if needed
-      if (!payment || payment.status === "INACTIVE") {
-        const paymentId = uuidv4();
+      // 3. ALWAYS create a new payment attempt
+      const paymentId = uuidv4();
 
-        const { rows: inserted } = await client.query(
-          `
+      const { rows: inserted } = await client.query(
+        `
         INSERT INTO payments (
           id,
           order_id,
@@ -106,11 +101,10 @@ const vnpayService = {
         VALUES ($1, $2, 'VNPAY', $3, 'PENDING', 'VNPAY', $4)
         RETURNING id, amount, status
         `,
-          [paymentId, order_id, order.total_amount, paymentId]
-        );
+        [paymentId, order_id, order.total_amount, paymentId]
+      );
 
-        payment = inserted[0];
-      }
+      const payment = inserted[0];
 
       // 4. Build VNPAY payment URL
       const amountVnp = toVnpAmount(payment.amount);
