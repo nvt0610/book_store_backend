@@ -67,7 +67,7 @@ export function buildGlobalSearch({ q, columns = [], alias }) {
 }
 
 /**
- * Operator handlers map — each returns { sql, params }.
+ * Operator handlers map â€” each returns { sql, params }.
  * Supports scalar and array-based operators.
  */
 const opHandlers = {
@@ -152,15 +152,22 @@ const opHandlers = {
  * @param {string} [opts.alias] - Table alias prefix
  * @returns {{ sql: string, params: any[] }}
  */
-export function buildFiltersWhere({ filters = [], allowedColumns = [], alias }) {
-  if (!Array.isArray(filters) || filters.length === 0) {
-    return { sql: "", params: [] };
-  }
-
+export function buildFiltersWhere({ filters = [], rawQuery = {}, allowedColumns = [], alias }) {
   const clauses = [];
   const params = [];
   const prefix = alias ? `${alias}.` : "";
 
+  // Add friendly filters (Option A)
+  for (const [field, rawValue] of Object.entries(rawQuery)) {
+    if (!allowedColumns.includes(field)) continue;
+    if (field === "filters") continue;
+
+    if (rawValue !== undefined && rawValue !== null) {
+      filters.push(parseFriendlyFilter(field, String(rawValue)));
+    }
+  }
+
+  // Parse old filters[] (no changes)
   for (const f of filters) {
     if (!f || !f.field) continue;
     const field = String(f.field).trim();
@@ -256,10 +263,29 @@ export function buildSelectColumns({ columns = [], alias, showDeleted = "active"
   return colList.join(", ");
 }
 
+export function parseFriendlyFilter(field, raw) {
+  if (raw === "null") return { field, op: "isNull" };
+  if (raw === "!=null") return { field, op: "isNotNull" };
+
+  if (raw.startsWith(">")) return { field, op: "gt", value: raw.slice(1) };
+  if (raw.startsWith("<")) return { field, op: "lt", value: raw.slice(1) };
+  if (raw.startsWith(">=")) return { field, op: "gte", value: raw.slice(2) };
+  if (raw.startsWith("<=")) return { field, op: "lte", value: raw.slice(2) };
+  if (raw.startsWith("!=")) return { field, op: "ne", value: raw.slice(2) };
+
+  if (raw.startsWith("~=")) return { field, op: "contains", value: raw.slice(2) };
+  if (raw.startsWith("^=")) return { field, op: "startsWith", value: raw.slice(2) };
+  if (raw.startsWith("$=")) return { field, op: "endsWith", value: raw.slice(2) };
+
+  return { field, op: "eq", value: raw };
+}
+
+
 export default {
   buildGlobalSearch,
   buildFiltersWhere,
   mergeWhereParts,
   buildOrderBy,
   buildSelectColumns,
+  parseFriendlyFilter,
 };

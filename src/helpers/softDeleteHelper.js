@@ -7,10 +7,10 @@
  *   // => { sql: "u.deleted_at IS NULL", params: [] }
  *
  * Modes:
- * - "active"   → deleted_at IS NULL
- * - "deleted"  → deleted_at IS NOT NULL
- * - "inactive" → status = 'INACTIVE'
- * - "all"      → no filter applied
+ * - "active"   â†’ deleted_at IS NULL
+ * - "deleted"  â†’ deleted_at IS NOT NULL
+ * - "inactive" â†’ status = 'INACTIVE'
+ * - "all"      â†’ no filter applied
  */
 
 /**

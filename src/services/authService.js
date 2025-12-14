@@ -34,7 +34,7 @@ const authService = {
     return rows[0];
   },
 
-  /** Login → verify password and issue JWT */
+  /** Login â†’ verify password and issue JWT */
   async login(email, password) {
     const sql = `
       SELECT id, email, password, role, full_name, status

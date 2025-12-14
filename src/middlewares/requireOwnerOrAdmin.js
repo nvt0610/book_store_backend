@@ -31,7 +31,7 @@ export function requireOwnerOrAdmin(tableName, paramName = "id") {
     let sql;
     let params = [recordId];
 
-    // SPECIAL CASE: payments → join orders to check ownership
+    // SPECIAL CASE: payments â†’ join orders to check ownership
     if (tableName === "payments") {
       sql = `
         SELECT o.user_id
@@ -90,7 +90,7 @@ export function requireCartOwnerOrAdmin(bodyKey = "cart_id", itemParam = null) {
 
       let cart_id = null;
 
-      // For update/delete item → find cart_id by itemId
+      // For update/delete item â†’ find cart_id by itemId
       if (itemParam) {
         const itemId = req.params[itemParam];
         const sql = `SELECT cart_id FROM cart_items WHERE id = $1`;
@@ -99,7 +99,7 @@ export function requireCartOwnerOrAdmin(bodyKey = "cart_id", itemParam = null) {
         cart_id = rows[0].cart_id;
       }
 
-      // For add/clear → read cart_id from body
+      // For add/clear â†’ read cart_id from body
       if (!cart_id) cart_id = req.body?.[bodyKey] || req.body?.cart_id;
 
       if (!cart_id) return responseHelper.badRequest(res, "cart_id is required");

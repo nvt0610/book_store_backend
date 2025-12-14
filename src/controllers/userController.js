@@ -132,6 +132,26 @@ const userController = {
     }
   },
 
+  async setStatus(req, res) {
+    try {
+      validate.uuid(req.params.id, "id");
+
+      const { status } = req.body;
+
+      validate.required(status, "status");
+      validate.enum(status, USER_STATUS, "status");
+
+      const user = await userService.setStatus(req.params.id, status);
+
+      return user
+        ? R.ok(res, user, "Status updated successfully")
+        : R.notFound(res, "User not found");
+    } catch (error) {
+      console.error("[userController.setStatus]", error);
+      return R.badRequest(res, error.message);
+    }
+  },
+
   /** DELETE /users/:id */
   async remove(req, res) {
     try {

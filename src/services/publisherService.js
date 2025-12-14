@@ -5,14 +5,22 @@ import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildGlobalSearch, buildSelectColumns } = queryHelper;
+const {
+  buildFiltersWhere,
+  mergeWhereParts,
+  buildOrderBy,
+  buildGlobalSearch,
+  buildSelectColumns,
+} = queryHelper;
 
 const publisherService = {
   async listPublishers(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
 
     const allowedColumns = ["name", "phone", "website", "created_at"];
-    const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
+    const filters = Array.isArray(queryParams.filters)
+      ? queryParams.filters
+      : [];
     const searchText = queryParams.q;
 
     const search = buildGlobalSearch({
@@ -22,17 +30,25 @@ const publisherService = {
     });
 
     const where = buildFiltersWhere({ filters, allowedColumns, alias: "p" });
-    const softDeleteFilter = buildSoftDeleteScope("p", queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([softDeleteFilter, search, where]);
+    const softDeleteFilter = buildSoftDeleteScope(
+      "p",
+      queryParams.showDeleted || "active"
+    );
+    const { whereSql, params } = mergeWhereParts([
+      softDeleteFilter,
+      search,
+      where,
+    ]);
 
-    const orderBy = buildOrderBy({
-      sortBy: queryParams.sortBy,
-      sortDir: queryParams.sortDir,
-      allowedSort: ["name", "created_at"],
-      alias: "p",
-    });
+    const orderBy =
+      buildOrderBy({
+        sortBy: queryParams.sortBy,
+        sortDir: queryParams.sortDir,
+        allowedSort: ["name", "created_at"],
+        alias: "p",
+      }) || "ORDER BY p.created_at DESC";
 
-    const selectColumns = buildSelectColumns({
+    const baseColumns = buildSelectColumns({
       alias: "p",
       columns: [
         "id",
@@ -47,13 +63,22 @@ const publisherService = {
       showDeleted: queryParams.showDeleted,
     });
 
+    const selectColumns = `
+    ${baseColumns},
+    COUNT(DISTINCT pr.id) AS product_count
+  `;
+
     const sql = `
     SELECT ${selectColumns}
     FROM publishers p
+    LEFT JOIN products pr
+      ON pr.publisher_id = p.id AND pr.deleted_at IS NULL
     ${whereSql}
-    ${orderBy || "ORDER BY p.created_at DESC"}
+    GROUP BY p.id
+    ${orderBy}
     LIMIT $${params.length + 1} OFFSET $${params.length + 2}
   `;
+
     const { rows } = await db.query(sql, [...params, limit, offset]);
 
     const countSql = `SELECT COUNT(*) AS total FROM publishers p ${whereSql}`;
@@ -66,13 +91,28 @@ const publisherService = {
 
   async getPublisherById(id, showDeleted = "active") {
     const softDeleteFilter = buildSoftDeleteScope("", showDeleted);
+
     const sql = `
-      SELECT id, name, address, phone, website, logo_url, created_at, updated_at, deleted_at
-      FROM publishers
-      WHERE id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
-    `;
+    SELECT id, name, address, phone, website, logo_url, created_at, updated_at, deleted_at
+    FROM publishers
+    WHERE id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
+  `;
     const { rows } = await db.query(sql, [id]);
-    return rows[0] || null;
+    const publisher = rows[0] || null;
+    if (!publisher) return null;
+
+    const productSql = `
+    SELECT id, name, price, stock, created_at, updated_at
+    FROM products
+    WHERE publisher_id = $1 AND deleted_at IS NULL
+    ORDER BY created_at DESC
+  `;
+    const { rows: products } = await db.query(productSql, [id]);
+
+    publisher.products = products;
+    publisher.product_count = products.length;
+
+    return publisher;
   },
 
   async createPublisher(data) {
@@ -89,7 +129,7 @@ const publisherService = {
       throw err;
     }
 
-    // Normalize optional fields: undefined → null
+    // Normalize optional fields: undefined â†’ null
     const address = data.address ?? null;
     const phone = data.phone ?? null;
     const website = data.website ?? null;
@@ -103,8 +143,8 @@ const publisherService = {
 
     const params = [
       id,
-      data.name,   // required
-      address,     // normalized
+      data.name, // required
+      address, // normalized
       phone,
       website,
       logo_url,
@@ -131,10 +171,10 @@ const publisherService = {
       UPDATE publishers
       SET
         name = COALESCE($2, name),
-        address = CASE WHEN $3 IS NOT NULL THEN $3 ELSE address END,
-        phone   = CASE WHEN $4 IS NOT NULL THEN $4 ELSE address END,
-        website = CASE WHEN $5 IS NOT NULL THEN $5 ELSE website END,
-        logo_url = CASE WHEN $6 IS NOT NULL THEN $6 ELSE logo_url END,
+        address = COALESCE($3, address),
+        phone   = COALESCE($4, phone),
+        website = COALESCE($5, website),
+        logo_url = COALESCE($6, logo_url),
         updated_at = now()
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING id, name, address, phone, website, logo_url, updated_at
@@ -156,7 +196,9 @@ const publisherService = {
       [id]
     );
     if (ref.rows.length) {
-      const e = new Error("Cannot delete publisher: products are still referencing this publisher");
+      const e = new Error(
+        "Cannot delete publisher: products are still referencing this publisher"
+      );
       e.status = 400;
       throw e;
     }

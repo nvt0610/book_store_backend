@@ -14,7 +14,7 @@ import responseHelper from "../helpers/responseHelper.js";
  *   router.get("/admin", requireAuth, requireRole("ADMIN"), controller.admin);
  *   router.post("/staff", requireAuth, requireRole("ADMIN", "STAFF"), controller.doStuff);
  *
- * If the user's role is not included in allowedRoles → respond with 403.
+ * If the user's role is not included in allowedRoles â†’ respond with 403.
  */
 export function requireRole(...allowedRoles) {
   return (req, res, next) => {

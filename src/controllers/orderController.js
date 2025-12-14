@@ -25,7 +25,6 @@ const orderController = {
       return order
         ? R.ok(res, order, "Fetched order successfully")
         : R.notFound(res, "Order not found");
-
     } catch (err) {
       console.error("[orderController.getById]", err);
       return R.badRequest(res, err.message);
@@ -40,7 +39,11 @@ const orderController = {
       const order = await orderService.getOrderById(id);
       if (!order) return R.notFound(res, "Order not found");
 
-      return R.ok(res, { items: order.items }, "Fetched order items successfully");
+      return R.ok(
+        res,
+        { items: order.items },
+        "Fetched order items successfully"
+      );
     } catch (err) {
       console.error("[orderController.listItems]", err);
       return R.badRequest(res, err.message);
@@ -50,26 +53,27 @@ const orderController = {
   /** ADMIN: manual order */
   async createManual(req, res) {
     try {
-      const { user_id, address_id, items } = req.body;
+      const { user_id, address_id, items, payment_method } = req.body;
 
       validate.uuidFields(req.body, ["user_id", "address_id"]);
       validate.arrayNotEmpty(items, "items");
 
-      // Validate từng item trong array
       for (const item of items) {
         validate.uuid(item.product_id, "product_id");
         validate.positive(item.quantity, "quantity");
       }
+
+      const method = validate.paymentMethod(payment_method);
 
       const order = await orderService.createOrder({
         mode: "manual",
         user_id,
         address_id,
         items,
+        payment_method: method,
       });
 
       return R.created(res, order, "Manual order created successfully");
-
     } catch (err) {
       console.error("[orderController.createManual]", err);
       return R.badRequest(res, err.message);
@@ -79,14 +83,26 @@ const orderController = {
   /** create from cart */
   async createFromCart(req, res) {
     try {
-      const { cart_id, address_id } = req.body;
+      const { cart_id, address_id, item_ids, payment_method } = req.body;
 
       validate.uuidFields(req.body, ["cart_id", "address_id"]);
+      validate.arrayNotEmpty(item_ids, "item_ids");
+      validate.uuidArray(item_ids, "item_ids");
+
+      if (!Array.isArray(item_ids) || item_ids.length === 0) {
+        throw new Error("item_ids is required and cannot be empty");
+      }
+
+      const method = validate.paymentMethod(payment_method);
+
+      item_ids.forEach((id) => validate.uuid(id, "item_id"));
 
       const order = await orderService.createOrder({
         mode: "cart",
         cart_id,
         address_id,
+        item_ids,
+        payment_method: method,
       });
 
       return R.created(res, order, "Order created from cart");
@@ -99,7 +115,7 @@ const orderController = {
   /** Buy now */
   async buyNow(req, res) {
     try {
-      const { address_id, product_id, quantity } = req.body || {};
+      const { address_id, product_id, quantity, payment_method } = req.body;
       const { user_id } = getRequestContext();
 
       validate.uuid(user_id, "user_id");
@@ -107,15 +123,17 @@ const orderController = {
       validate.uuid(product_id, "product_id");
       validate.positive(quantity, "quantity");
 
+      const method = validate.paymentMethod(payment_method);
+
       const order = await orderService.createOrder({
         mode: "instant",
         address_id,
         product_id,
         quantity,
+        payment_method: method,
       });
 
       return R.created(res, order, "Order created via Buy Now");
-
     } catch (err) {
       console.error("[orderController.buyNow]", err);
       return R.badRequest(res, err.message);
@@ -133,7 +151,6 @@ const orderController = {
 
       const data = await orderService.cancelOrder(id, reason);
       return R.ok(res, data, "Order cancelled");
-
     } catch (err) {
       console.error("[orderController.cancel]", err);
       return R.badRequest(res, err.message);
@@ -146,12 +163,19 @@ const orderController = {
       const { id } = req.params;
       validate.uuid(id, "id");
 
+      if (req.body.payment_method) {
+        throw new Error("payment_method cannot be updated");
+      }
+
+      if (req.body.address_id) {
+        validate.uuid(req.body.address_id, "address_id");
+      }
+
       const updated = await orderService.updateOrder(id, req.body);
 
       return updated
         ? R.ok(res, updated, "Order updated successfully")
         : R.notFound(res, "Order not found");
-
     } catch (err) {
       console.error("[orderController.update]", err);
       return R.badRequest(res, err.message);
@@ -169,7 +193,6 @@ const orderController = {
       return deleted
         ? R.ok(res, { deleted: true }, "Order deleted successfully")
         : R.notFound(res, "Order not found");
-
     } catch (err) {
       console.error("[orderController.remove]", err);
       return R.internalError(res, err.message);

@@ -10,13 +10,13 @@
  */
 
 export default function errorHandler(err, req, res, next) {
-  // Nếu response đã gửi, bỏ qua
+  // Náº¿u response Ä‘Ă£ gá»­i, bá» qua
   if (res.headersSent) return next(err);
 
   const status = err.status || 500;
   const env = process.env.NODE_ENV || "development";
 
-  // Chuẩn hóa body JSON
+  // Chuáº©n hĂ³a body JSON
   const errorResponse = {
     success: false,
     status,
@@ -29,15 +29,15 @@ export default function errorHandler(err, req, res, next) {
     },
   };
 
-  // Gắn thêm chi tiết lỗi nếu đang ở môi trường dev
+  // Gáº¯n thĂªm chi tiáº¿t lá»—i náº¿u Ä‘ang á»Ÿ mĂ´i trÆ°á»ng dev
   if (env === "development") {
     errorResponse.error.stack = err.stack;
     if (err.detail) errorResponse.error.detail = err.detail;
   }
 
-  // Log lỗi ra console
+  // Log lá»—i ra console
   console.error(
-    `[ERROR] ${req.method} ${req.originalUrl} (${status}) →`,
+    `[ERROR] ${req.method} ${req.originalUrl} (${status}) â†’`,
     err.message
   );
 

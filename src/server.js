@@ -28,8 +28,8 @@ app.disable("x-powered-by");
 
 /**
  * Middleware order:
- * 1️ authJWT → decode token, attach req.user
- * 2️ attachRequestContext → push user_id vào ALS
+ * 1ï¸ authJWT â†’ decode token, attach req.user
+ * 2ï¸ attachRequestContext â†’ push user_id vĂ o ALS
  */
 app.use(authJWT);
 app.use(attachRequestContext);

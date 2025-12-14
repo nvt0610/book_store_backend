@@ -88,10 +88,26 @@ const categoryController = {
     try {
       validate.uuid(req.params.id, "id");
 
-      const deleted = await categoryService.remove(req.params.id);
-      return deleted
-        ? R.ok(res, { deleted: true }, "Category soft deleted successfully")
-        : R.notFound(res, "Category not found or already deleted");
+      const result = await categoryService.remove(req.params.id);
+
+      if (!result.deleted) {
+        return R.notFound(res, "Category not found or already deleted");
+      }
+
+      console.log(
+        `[Category Delete] category_id=${req.params.id}, detached_products=${result.detachedCount}`
+      );
+
+      return R.ok(
+        res,
+        {
+          deleted: true,
+          detachedCount: result.detachedCount,
+        },
+        result.detachedCount > 0
+          ? `Category deleted. ${result.detachedCount} products moved to no-category`
+          : "Category deleted successfully"
+      );
 
     } catch (err) {
       console.error("[categoryController.remove]", err);
@@ -125,7 +141,7 @@ const categoryController = {
       let { product_ids } = req.body;
       validate.required(product_ids, "product_ids");
 
-      // Cho phép gửi 1 id thay vì array
+      // Cho phĂ©p gá»­i 1 id thay vĂ¬ array
       if (!Array.isArray(product_ids)) {
         product_ids = [product_ids];
       }

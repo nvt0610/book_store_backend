@@ -23,26 +23,39 @@ const categoryService = {
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
 
-    const allowedFilters = ["name", "created_at"];
+    const allowedColumns = ["name", "created_at"];
     const allowedSort = ["name", "created_at"];
     const searchColumns = ["name", "description"];
 
+    // SEARCH
     const search = buildGlobalSearch({
       q: queryParams.q,
       columns: searchColumns,
       alias: "c",
     });
 
-    const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
+    // FILTERS
+    const filters = Array.isArray(queryParams.filters)
+      ? queryParams.filters
+      : [];
     const where = buildFiltersWhere({
       filters,
-      allowedColumns: allowedFilters,
+      rawQuery: queryParams,
+      allowedColumns: allowedColumns,
       alias: "c",
     });
 
-    const soft = buildSoftDeleteScope("c", queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([soft, search, where]);
+    // SOFT DELETE
+    const { showDeleted = "active" } = queryParams;
+    const soft = buildSoftDeleteScope("c", showDeleted);
 
+    const { whereSql, params: whereParams } = mergeWhereParts([
+      soft,
+      search,
+      where,
+    ]);
+
+    // SORT
     const orderBy =
       buildOrderBy({
         sortBy: queryParams.sortBy,
@@ -51,66 +64,78 @@ const categoryService = {
         alias: "c",
       }) || "ORDER BY c.created_at DESC";
 
+    // SELECT COLUMNS using template (same as Users)
+    // -> Auto append deleted_at when showDeleted=all
+    const baseColumns = buildSelectColumns({
+      alias: "c",
+      columns: ["id", "name", "description", "created_at", "updated_at"],
+      showDeleted,
+    });
+
     const selectColumns = `
-      c.id, c.name, c.description, c.created_at, c.updated_at,
-      COUNT(DISTINCT p.id) AS product_count
-    `;
+    ${baseColumns},
+    COUNT(DISTINCT p.id) AS product_count
+  `;
 
+    // MAIN QUERY
     const sql = `
-      SELECT ${selectColumns}
-      FROM categories c
-      LEFT JOIN products p ON p.category_id = c.id AND p.deleted_at IS NULL
-      ${whereSql}
-      GROUP BY c.id
-      ${orderBy}
-      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-    `;
+    SELECT ${selectColumns}
+    FROM categories c
+    LEFT JOIN products p 
+      ON p.category_id = c.id AND p.deleted_at IS NULL
+    ${whereSql}
+    GROUP BY c.id
+    ${orderBy}
+    LIMIT $${whereParams.length + 1} OFFSET $${whereParams.length + 2}
+  `;
 
-    const { rows } = await db.query(sql, [...params, limit, offset]);
+    const { rows } = await db.query(sql, [...whereParams, limit, offset]);
 
-    const countSql = `SELECT COUNT(*) AS total FROM categories c ${whereSql}`;
-    const { rows: countRows } = await db.query(countSql, params);
+    // COUNT QUERY
+    const countSql = `
+    SELECT COUNT(*) AS total
+    FROM categories c
+    ${whereSql}
+  `;
+    const { rows: countRows } = await db.query(countSql, whereParams);
     const total = Number(countRows[0]?.total || 0);
 
-    return { data: rows, meta: buildPageMeta({ total, page, pageSize }) };
+    return {
+      data: rows,
+      meta: buildPageMeta({ total, page, pageSize }),
+    };
   },
 
   /**
    * Get category by ID + products list
    */
   async getById(id, showDeleted = "active") {
-    const soft = buildSoftDeleteScope("", showDeleted);
+    const soft = buildSoftDeleteScope("c", showDeleted);
 
-    const categorySql = `
-      SELECT id, name, description, created_at, updated_at, deleted_at
-      FROM categories
-      WHERE id = $1 ${soft.sql ? `AND ${soft.sql}` : ""}
-    `;
-    const { rows } = await db.query(categorySql, [id]);
-    const category = rows[0];
-    if (!category) return null;
+    const sql = `
+    SELECT
+      c.id,
+      c.name,
+      c.description,
+      c.created_at,
+      c.updated_at,
+      c.deleted_at
+    FROM categories c
+    WHERE c.id = $1 ${soft.sql ? `AND ${soft.sql}` : ""}
+  `;
 
-    // Fetch products in this category (active only)
-    const productSql = `
-      SELECT id, name, price, stock, created_at, updated_at
-      FROM products
-      WHERE category_id = $1 AND deleted_at IS NULL
-      ORDER BY created_at DESC
-    `;
-    const { rows: products } = await db.query(productSql, [id]);
-    category.products = products;
-    category.product_count = products.length;
-
-    return category;
+    const { rows } = await db.query(sql, [id]);
+    return rows[0] || null;
   },
 
   /**
- * Create new category
- */
+   * Create new category
+   */
   async create(data) {
     // Normalize
     if (typeof data.name === "string") data.name = data.name.trim();
-    if (typeof data.description === "string") data.description = data.description.trim();
+    if (typeof data.description === "string")
+      data.description = data.description.trim();
 
     // Check name uniqueness
     const dup = await db.query(
@@ -134,12 +159,13 @@ const categoryService = {
   },
 
   /**
- * Update category info (PATCH)
- */
+   * Update category info (PATCH)
+   */
   async update(id, data) {
     // Normalize
     if (typeof data.name === "string") data.name = data.name.trim();
-    if (typeof data.description === "string") data.description = data.description.trim();
+    if (typeof data.description === "string")
+      data.description = data.description.trim();
 
     // check duplicate name if provided
     if (data.name) {
@@ -171,21 +197,40 @@ const categoryService = {
    * Soft delete category
    */
   async remove(id) {
-    const sql = `
-      UPDATE categories
-      SET deleted_at = now(), updated_at = now()
-      WHERE id = $1 AND deleted_at IS NULL
-    `;
-    const { rowCount } = await db.query(sql, [id]);
-    return rowCount > 0;
+    await db.query("BEGIN");
+
+    // 1) Tách sản phẩm
+    const detachSql = `
+    UPDATE products
+    SET category_id = NULL, updated_at = now()
+    WHERE category_id = $1 AND deleted_at IS NULL
+    RETURNING id
+  `;
+    const { rows: detachedProducts } = await db.query(detachSql, [id]);
+
+    // 2) Soft delete category
+    const deleteSql = `
+    UPDATE categories
+    SET deleted_at = now(), updated_at = now()
+    WHERE id = $1 AND deleted_at IS NULL
+    RETURNING id
+  `;
+    const { rowCount } = await db.query(deleteSql, [id]);
+
+    await db.query("COMMIT");
+
+    return {
+      deleted: rowCount > 0,
+      detachedCount: detachedProducts.length,
+    };
   },
 
   /**
- * Attach products to a category.
- * In one-to-many model, each product belongs to exactly one category.
- * If a product is already in another category, it will be reassigned.
- * Products already in this category are ignored.
- */
+   * Attach products to a category.
+   * In one-to-many model, each product belongs to exactly one category.
+   * If a product is already in another category, it will be reassigned.
+   * Products already in this category are ignored.
+   */
   async addProducts(categoryId, product_ids = []) {
     if (!Array.isArray(product_ids) || product_ids.length === 0) return [];
 
@@ -210,7 +255,10 @@ const categoryService = {
         AND category_id = $2
         AND deleted_at IS NULL
     `;
-    const { rows: existing } = await db.query(checkSql, [product_ids, categoryId]);
+    const { rows: existing } = await db.query(checkSql, [
+      product_ids,
+      categoryId,
+    ]);
     const existingIds = existing.map((r) => r.id);
     const filteredIds = product_ids.filter((id) => !existingIds.includes(id));
 
@@ -243,7 +291,10 @@ const categoryService = {
         AND category_id = $2
         AND deleted_at IS NULL
     `;
-    const { rows: validRows } = await db.query(checkSql, [product_ids, categoryId]);
+    const { rows: validRows } = await db.query(checkSql, [
+      product_ids,
+      categoryId,
+    ]);
 
     if (validRows.length === 0) {
       const e = new Error("No valid products found in this category");

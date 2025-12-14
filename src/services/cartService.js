@@ -6,12 +6,7 @@ import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 import cartItemService from "./cartItemService.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const {
-  buildFiltersWhere,
-  mergeWhereParts,
-  buildOrderBy,
-  buildSelectColumns,
-} = queryHelper;
+const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildSelectColumns } = queryHelper;
 
 /**
  * Service layer: Cart CRUD + business logic
@@ -23,15 +18,21 @@ const cartService = {
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
     const allowedFilters = ["user_id", "status"];
-    const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
+    const filters = Array.isArray(queryParams.filters)
+      ? queryParams.filters
+      : [];
 
     const where = buildFiltersWhere({
       filters,
+      rawQuery: queryParams,
       allowedColumns: allowedFilters,
       alias: "c",
     });
 
-    const softDeleteFilter = buildSoftDeleteScope("c", queryParams.showDeleted || "active");
+    const softDeleteFilter = buildSoftDeleteScope(
+      "c",
+      queryParams.showDeleted || "active"
+    );
     const { whereSql, params } = mergeWhereParts([softDeleteFilter, where]);
 
     const orderBy =
@@ -78,7 +79,7 @@ const cartService = {
     const cart = rows[0];
     if (!cart) return null;
 
-    // Attach cart items (HARD DELETE → NO deleted_at)
+    // Attach cart items (HARD DELETE â†’ NO deleted_at)
     const itemSql = `
     SELECT id, cart_id, product_id, quantity, created_at, updated_at
     FROM cart_items
@@ -101,18 +102,18 @@ const cartService = {
       throw err;
     }
 
-    const softDeleteFilter = buildSoftDeleteScope("", showDeleted);
     const sql = `
     SELECT id, user_id, status, created_at, updated_at, deleted_at
     FROM carts
-    WHERE user_id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
-    ORDER BY created_at DESC
+    WHERE user_id = $1
+      AND status = 'ACTIVE'
+      AND deleted_at IS NULL
     LIMIT 1
   `;
+
     const { rows } = await db.query(sql, [user_id]);
     let cart = rows[0];
 
-    // Lazy create nếu user chưa có cart
     if (!cart) {
       const createSql = `
       INSERT INTO carts (id, user_id, status)
@@ -124,7 +125,7 @@ const cartService = {
       cart = newCart[0];
     }
 
-    // Lấy items của cart
+    // Láº¥y items cá»§a cart
     const itemSql = `
     SELECT id, cart_id, product_id, quantity, created_at, updated_at
     FROM cart_items
@@ -138,8 +139,8 @@ const cartService = {
   },
 
   /**
- * Get or create ACTIVE guest cart by guest_token.
- */
+   * Get or create ACTIVE guest cart by guest_token.
+   */
   async getOrCreateGuestCart(guest_token) {
     if (!guest_token || typeof guest_token !== "string") {
       const err = new Error("guest_token is required");
@@ -160,7 +161,7 @@ const cartService = {
     const { rows } = await db.query(sql, [token]);
     let cart = rows[0];
 
-    // 2. If exists → return cart (no create)
+    // 2. If exists â†’ return cart (no create)
     if (cart) {
       cart.items = await cartItemService.getItemsByCart(cart.id);
       return { cart, created: false };
@@ -176,14 +177,14 @@ const cartService = {
     const { rows: newCart } = await db.query(insertSql, [id, token]);
     cart = newCart[0];
 
-    cart.items = []; // hoặc fetch items cũng được
+    cart.items = [];
 
     return { cart, created: true };
   },
 
   /**
- * Merge guest cart into user's ACTIVE cart after login.
- */
+   * Merge guest cart into user's ACTIVE cart after login.
+   */
   async mergeGuestCartToUser({ guest_token, user_id }) {
     if (!guest_token) {
       const err = new Error("guest_token is required");
@@ -216,7 +217,7 @@ const cartService = {
       );
       const guestCart = guestRows[0];
 
-      // No guest cart → simply return user cart
+      // No guest cart â†’ simply return user cart
       if (!guestCart) {
         await client.query("COMMIT");
         return await this.getMyCart(user_id);
@@ -383,7 +384,11 @@ const cartService = {
       VALUES ($1, $2, $3)
       RETURNING id, user_id, status, created_at
     `;
-    const { rows } = await db.query(sql, [id, data.user_id, data.status || "ACTIVE"]);
+    const { rows } = await db.query(sql, [
+      id,
+      data.user_id,
+      data.status || "ACTIVE",
+    ]);
     return rows[0];
   },
 

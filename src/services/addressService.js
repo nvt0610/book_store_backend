@@ -49,6 +49,7 @@ const addressService = {
 
     const where = buildFiltersWhere({
       filters,
+      rawQuery: queryParams,
       allowedColumns,
       alias: "a",
     });
@@ -137,6 +138,20 @@ const addressService = {
       throw e;
     }
 
+    // -------------------------------
+    // NEW LOGIC: Nếu is_default=true → unset default cũ
+    // -------------------------------
+    if (data.is_default === true) {
+      await db.query(
+        `
+        UPDATE addresses
+        SET is_default = false, updated_at = now()
+        WHERE user_id = $1 AND deleted_at IS NULL AND is_default = true
+      `,
+        [data.user_id]
+      );
+    }
+
     const id = uuidv4();
 
     const sql = `
@@ -174,22 +189,30 @@ const addressService = {
       throw e;
     }
 
-    // Prevent changing is_default through update
+    // if FE send is_default=true → change to logic setDefault()
     if ("is_default" in data) {
-      const e = new Error("Updating is_default is not permitted. Use /set-default instead.");
-      e.status = 400;
-      throw e;
+      if (data.is_default === true) {
+        return this.setDefault(id);
+      }
+      if (data.is_default === false) {
+        const e = new Error("Cannot unset default manually. Another address must be set as default.");
+        e.status = 400;
+        throw e;
+      }
     }
+
+    // Normalize "" => null
+    const normalize = (v) => (v === "" ? null : v);
 
     const sql = `
     UPDATE addresses
     SET
-      full_name = COALESCE($2, full_name),
-      phone = COALESCE($3, phone),
-      address_line = COALESCE($4, address_line),
-      address_line2 = COALESCE($5, address_line2),
-      postal_code = COALESCE($6, postal_code),
-      updated_at = now()
+      full_name     = $2,
+      phone         = $3,
+      address_line  = $4,
+      address_line2 = $5,
+      postal_code   = $6,
+      updated_at    = now()
     WHERE id = $1 AND deleted_at IS NULL
     RETURNING id, user_id, full_name, phone, address_line,
               address_line2, postal_code, is_default, updated_at
@@ -197,11 +220,11 @@ const addressService = {
 
     const { rows } = await db.query(sql, [
       id,
-      data.full_name,
-      data.phone,
-      data.address_line,
-      data.address_line2,
-      data.postal_code,
+      normalize(data.full_name),
+      normalize(data.phone),
+      normalize(data.address_line),
+      normalize(data.address_line2),
+      normalize(data.postal_code),
     ]);
 
     return rows[0] || null;

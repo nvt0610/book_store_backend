@@ -8,7 +8,12 @@ import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 import { getRequestContext } from "../middlewares/requestContext.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const { buildFiltersWhere, mergeWhereParts, buildOrderBy } = queryHelper;
+const {
+    buildFiltersWhere,
+    mergeWhereParts,
+    buildOrderBy,
+    buildSelectColumns,
+} = queryHelper;
 
 /**
  * Service layer: Payments CRUD + helpers
@@ -19,30 +24,34 @@ const paymentService = {
      */
     async listPayments(queryParams = {}) {
         const { page, pageSize, limit, offset } = parsePagination(queryParams);
+
         const allowedFilters = ["order_id", "payment_method", "status"];
         const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
 
         const where = buildFiltersWhere({
             filters,
+            rawQuery: queryParams,
             allowedColumns: allowedFilters,
             alias: "p",
         });
 
-        const softDeleteFilter = buildSoftDeleteScope("p", queryParams.showDeleted || "active");
+        const softDeleteFilter = buildSoftDeleteScope(
+            "p",
+            queryParams.showDeleted || "active",
+        );
+
         let { whereSql, params } = mergeWhereParts([softDeleteFilter, where]);
 
-        // Add owner filter
         const { user_id, role } = getRequestContext();
         let joinSql = "";
 
         if (role !== "ADMIN") {
-            // Customer → only own payments
             joinSql = `
-            JOIN orders o2 
-              ON o2.id = p.order_id
-             AND o2.user_id = $${params.length + 1}
-             AND o2.deleted_at IS NULL
-        `;
+        JOIN orders o2 
+          ON o2.id = p.order_id
+         AND o2.user_id = $${params.length + 1}
+         AND o2.deleted_at IS NULL
+      `;
             params.push(user_id);
         }
 
@@ -54,25 +63,49 @@ const paymentService = {
                 alias: "p",
             }) || "ORDER BY p.created_at DESC";
 
+        const selectColumns = buildSelectColumns({
+            alias: "p",
+            columns: [
+                "id",
+                "order_id",
+                "payment_method",
+                "amount",
+                "status",
+                "payment_ref",
+                "payment_date",
+                "created_at",
+                "updated_at",
+            ],
+            showDeleted: queryParams.showDeleted,
+        });
+
         const sql = `
-        SELECT 
-            p.id, p.order_id, p.payment_method, p.amount,
-            p.status, p.payment_ref, p.payment_date,
-            p.created_at, p.updated_at
-        FROM payments p
-        ${joinSql}
-        ${whereSql}
-        ${orderBy}
-        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      SELECT ${selectColumns}
+      FROM payments p
+      ${joinSql}
+      ${whereSql}
+      ${orderBy}
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
 
         const { rows } = await db.query(sql, [...params, limit, offset]);
 
-        const countSql = `SELECT COUNT(*) AS total FROM payments p ${joinSql} ${whereSql}`;
+        const countSql = `
+      SELECT COUNT(*) AS total
+      FROM payments p
+      ${joinSql}
+      ${whereSql}
+    `;
         const { rows: countRows } = await db.query(countSql, params);
-        const total = Number(countRows[0]?.total || 0);
 
-        return { data: rows, meta: buildPageMeta({ total, page, pageSize }) };
+        return {
+            data: rows,
+            meta: buildPageMeta({
+                total: Number(countRows[0]?.total || 0),
+                page,
+                pageSize,
+            }),
+        };
     },
 
     /**
@@ -182,7 +215,7 @@ const paymentService = {
             throw e;
         }
 
-        // Rule 2: Enforce 1–1 (one payment per order)
+        // Rule 2: Enforce (one payment per order)
         const { rows: existingPay } = await db.query(
             `SELECT id FROM payments 
          WHERE order_id = $1 AND deleted_at IS NULL 
@@ -327,7 +360,6 @@ const paymentService = {
         try {
             await client.query("BEGIN");
 
-            // 1. Lấy payment PENDING mới nhất
             const { rows: payRows } = await client.query(
                 `
             SELECT id
@@ -349,7 +381,6 @@ const paymentService = {
 
             const payment_id = payRows[0].id;
 
-            // 2. Lấy danh sách các sản phẩm trong order
             const { rows: items } = await client.query(
                 `
             SELECT oi.product_id, oi.quantity
@@ -360,7 +391,6 @@ const paymentService = {
                 [order_id]
             );
 
-            // 3. VALIDATE tồn kho trước khi trừ
             for (const it of items) {
                 const { rows: stockRows } = await client.query(
                     `
@@ -387,7 +417,6 @@ const paymentService = {
                 }
             }
 
-            // 4. Trừ tồn kho
             for (const it of items) {
                 await client.query(
                     `
@@ -401,7 +430,6 @@ const paymentService = {
                 );
             }
 
-            // 5. Cập nhật trạng thái payment → COMPLETED
             await client.query(
                 `
             UPDATE payments
@@ -414,7 +442,6 @@ const paymentService = {
                 [payment_id]
             );
 
-            // 6. Cập nhật trạng thái đơn hàng (nếu syncOrder = true)
             if (syncOrder) {
                 await client.query(
                     `

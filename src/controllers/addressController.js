@@ -60,12 +60,16 @@ const addressController = {
 
         validate.maxLength(body.full_name, 150, "full_name");
         validate.maxLength(body.phone, 20, "phone");
+        validate.phoneNumber(body.phone, "phone");
       } catch (e) {
         return R.badRequest(res, e.message);
       }
 
       // Always enforce authenticated user
-      const data = { ...body, user_id: req.user.id };
+      const data = {
+        ...body,
+        user_id: body.user_id ?? req.user.id   // nếu FE gửi user_id → dùng nó
+      };
 
       const created = await addressService.create(data);
       return R.created(res, created, "Address created successfully");
@@ -86,7 +90,7 @@ const addressController = {
 
       const body = req.body;
 
-      // Optional updates → clean input
+      // Optional updates â†’ clean input
       if (body.full_name) {
         body.full_name = validate.trimString(body.full_name, "full_name");
         validate.maxLength(body.full_name, 150, "full_name");
@@ -95,6 +99,7 @@ const addressController = {
       if (body.phone) {
         body.phone = validate.trimString(body.phone, "phone");
         validate.maxLength(body.phone, 20, "phone");
+        validate.phoneNumber(body.phone, "phone");
       }
 
       if (body.address_line)

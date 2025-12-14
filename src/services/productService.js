@@ -15,9 +15,16 @@ const {
 
 const productService = {
   async list(queryParams = {}) {
+    // ----------------------------------------
+    // Pagination
+    // ----------------------------------------
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
 
+    // ----------------------------------------
+    // Whitelisted filterable columns
+    // ----------------------------------------
     const allowedFilters = [
+      "id",
       "name",
       "price",
       "stock",
@@ -28,40 +35,56 @@ const productService = {
       "created_at",
     ];
 
-    const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
-    const searchText = queryParams.q;
-
+    // ----------------------------------------
+    // Global search (name + description)
+    // ----------------------------------------
     const search = buildGlobalSearch({
-      q: searchText,
+      q: queryParams.q,
       columns: ["name", "description"],
       alias: "p",
     });
 
+    // ----------------------------------------
+    // Structured filters (filters[] or friendly query)
+    // ----------------------------------------
+    const filters = Array.isArray(queryParams.filters)
+      ? queryParams.filters
+      : [];
+
     const where = buildFiltersWhere({
       filters,
+      rawQuery: queryParams,
       allowedColumns: allowedFilters,
       alias: "p",
     });
 
-    const softDeleteFilter = buildSoftDeleteScope(
+    // ----------------------------------------
+    // Soft delete scope
+    // ----------------------------------------
+    const softDelete = buildSoftDeleteScope(
       "p",
-      queryParams.showDeleted || "active",
+      queryParams.showDeleted || "active"
     );
 
-    const { whereSql, params } = mergeWhereParts([
-      softDeleteFilter,
-      search,
-      where,
-    ]);
+    // ----------------------------------------
+    // Merge WHERE conditions safely
+    // ----------------------------------------
+    const { whereSql, params } = mergeWhereParts([softDelete, search, where]);
 
+    // ----------------------------------------
+    // Sorting (safe whitelist)
+    // ----------------------------------------
     const orderBy =
       buildOrderBy({
         sortBy: queryParams.sortBy,
         sortDir: queryParams.sortDir,
-        allowedSort: ["name", "price", "stock", "created_at"],
+        allowedSort: ["name", "price", "stock", "created_at", "updated_at"],
         alias: "p",
       }) || "ORDER BY p.created_at DESC";
 
+    // ----------------------------------------
+    // Select columns
+    // ----------------------------------------
     const selectColumns = buildSelectColumns({
       alias: "p",
       columns: [
@@ -82,22 +105,48 @@ const productService = {
       showDeleted: queryParams.showDeleted,
     });
 
+    // ----------------------------------------
+    // Main query
+    // ----------------------------------------
     const sql = `
-      SELECT ${selectColumns}
-      FROM products p
-      ${whereSql}
-      ${orderBy}
-      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
-    `;
+  SELECT
+    ${selectColumns},
+    a.name AS author_name,
+    pub.name AS publisher_name
+  FROM products p
+  LEFT JOIN authors a 
+    ON a.id = p.author_id AND a.deleted_at IS NULL
+  LEFT JOIN publishers pub
+    ON pub.id = p.publisher_id AND pub.deleted_at IS NULL
+  ${whereSql}
+  ${orderBy}
+  LIMIT $${params.length + 1}
+  OFFSET $${params.length + 2}
+`;
 
     const { rows } = await db.query(sql, [...params, limit, offset]);
 
-    const countSql = `SELECT COUNT(*) AS total FROM products p ${whereSql}`;
+    // ----------------------------------------
+    // Total count (for pagination)
+    // ----------------------------------------
+    const countSql = `
+    SELECT COUNT(*) AS total
+    FROM products p
+    ${whereSql}
+  `;
+
     const { rows: countRows } = await db.query(countSql, params);
     const total = Number(countRows[0]?.total || 0);
 
+    // ----------------------------------------
+    // Pagination metadata
+    // ----------------------------------------
     const meta = buildPageMeta({ total, page, pageSize });
-    return { data: rows, meta };
+
+    return {
+      data: rows,
+      meta,
+    };
   },
 
   async getById(id, showDeleted = "active") {
@@ -110,7 +159,9 @@ const productService = {
         p.category_id, p.publisher_id, p.author_id,
         p.status, p.created_at, p.updated_at, p.deleted_at
       FROM products p
-      WHERE p.id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
+      WHERE p.id = $1 ${
+        softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""
+      }
     `;
 
     const { rows } = await db.query(sql, [id]);
@@ -118,7 +169,7 @@ const productService = {
   },
 
   async create(data) {
-    // Cho phép trùng tên sách → không check unique
+    // Cho phĂ©p trĂ¹ng tĂªn sĂ¡ch â†’ khĂ´ng check unique
     let price = 0;
     if (data.price != null) {
       price = Number(data.price);
@@ -154,7 +205,9 @@ const productService = {
 
     if ("extra_images" in data) {
       if (data.extra_images === null) {
-        const e = new Error("extra_images cannot be null. Use [] to clear images.");
+        const e = new Error(
+          "extra_images cannot be null. Use [] to clear images."
+        );
         e.status = 400;
         throw e;
       }
@@ -165,7 +218,7 @@ const productService = {
         throw e;
       }
 
-      // FE wants to set empty list → []
+      // FE wants to set empty list â†’ []
       extraImages = data.extra_images.map((v) => String(v));
     }
 
@@ -328,11 +381,13 @@ const productService = {
       }
     }
 
-    let extraImages = undefined; // undefined → skip update, null → forbidden
+    let extraImages = undefined; // undefined â†’ skip update, null â†’ forbidden
 
     if ("extra_images" in data) {
       if (data.extra_images === null) {
-        const e = new Error("extra_images cannot be null. Use [] to clear images.");
+        const e = new Error(
+          "extra_images cannot be null. Use [] to clear images."
+        );
         e.status = 400;
         throw e;
       }
@@ -344,6 +399,8 @@ const productService = {
       }
 
       extraImages = data.extra_images.map((v) => String(v)); // may be []
+
+      extraImages = `{${extraImages.map((v) => `"${v}"`).join(",")}}`;
     }
 
     const sql = `
@@ -354,7 +411,7 @@ const productService = {
         price = COALESCE($4, price),
         stock = COALESCE($5, stock),
         main_image = COALESCE($6, main_image),
-        extra_images = CASE WHEN $7 IS NOT NULL THEN $7 ELSE extra_images END,
+        extra_images = COALESCE($7::text[], extra_images),
         category_id = COALESCE($8, category_id),
         publisher_id = COALESCE($9, publisher_id),
         author_id = COALESCE($10, author_id),
@@ -375,7 +432,7 @@ const productService = {
       price,
       stock,
       data.main_image ?? null,
-      extraImages,
+      extraImages ?? null,
       data.category_id ?? null,
       data.publisher_id ?? null,
       data.author_id ?? null,

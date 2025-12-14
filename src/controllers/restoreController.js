@@ -6,7 +6,7 @@ import restoreService from "../services/restoreService.js";
 
 const R = responseHelper;
 
-// Whitelist các bảng được phép restore
+// Whitelist cĂ¡c báº£ng Ä‘Æ°á»£c phĂ©p restore
 const ALLOWED_TABLES = [
   "users",
   "categories",

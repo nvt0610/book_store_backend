@@ -241,6 +241,8 @@ CREATE TABLE order_items (
   updated_at TIMESTAMPTZ,
   deleted_at TIMESTAMPTZ,
 
+  deleted_by UUID REFERENCES users(id)
+
   CONSTRAINT ck_order_items_qty_price CHECK (quantity > 0 AND price >= 0)
 );
 
@@ -256,10 +258,15 @@ CREATE TABLE payments (
   amount         DECIMAL(10,2) NOT NULL,
   status         payment_status NOT NULL DEFAULT 'PENDING',
   payment_ref    VARCHAR(100), -- nếu có (COD vẫn để trống được)
+  gateway VARCHAR(30),
+  gateway_payload JSONB,
+  gateway_response_code VARCHAR(20),
 
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ,
   deleted_at TIMESTAMPTZ,
+
+  deleted_by UUID REFERENCES users(id)
 
   CONSTRAINT ck_payments_amount_pos CHECK (amount > 0)
 );
@@ -342,8 +349,7 @@ CREATE UNIQUE INDEX ux_carts_user_active
 
 -- Không trùng (cart_id, product_id) trong cart_items active
 CREATE UNIQUE INDEX ux_cart_items_unique
-  ON cart_items(cart_id, product_id)
-  WHERE deleted_at IS NULL;
+ON cart_items(cart_id, product_id);
 
 -- (4) Không trùng (order_id, product_id) trong order_items active
 CREATE UNIQUE INDEX ux_order_items_unique

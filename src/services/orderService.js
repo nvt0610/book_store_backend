@@ -4,10 +4,22 @@ import paginationHelper from "../helpers/paginationHelper.js";
 import queryHelper from "../helpers/queryHelper.js";
 import { buildSoftDeleteScope } from "../helpers/softDeleteHelper.js";
 import { getRequestContext } from "../middlewares/requestContext.js";
-import { ensureAddressValid, ensureProductValid, ensureUserExists } from "../helpers/inputValidator.js";
+import validate from "../helpers/validateHelper.js";
+import inventoryService from "./inventoryService.js";
+import {
+  ensureAddressValid,
+  ensureProductValid,
+  ensureUserExists,
+} from "../helpers/inputValidator.js";
 
 const { parsePagination, buildPageMeta } = paginationHelper;
-const { buildFiltersWhere, mergeWhereParts, buildOrderBy } = queryHelper;
+const {
+  buildFiltersWhere,
+  mergeWhereParts,
+  buildOrderBy,
+  buildGlobalSearch,
+  buildSelectColumns,
+} = queryHelper;
 
 /**
  * Service layer: Orders CRUD + creation flows (cart, instant, manual)
@@ -18,10 +30,12 @@ const orderService = {
    */
   async listOrders(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
-    const allowedFilters = ["user_id", "status", "address_id"];
-    const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
 
-    // Inject user filter like addressService
+    const allowedFilters = ["user_id", "status", "address_id"];
+    const filters = Array.isArray(queryParams.filters)
+      ? queryParams.filters
+      : [];
+
     const { user_id, role } = getRequestContext();
     if (role !== "ADMIN") {
       filters.push({
@@ -33,12 +47,27 @@ const orderService = {
 
     const where = buildFiltersWhere({
       filters,
+      rawQuery: queryParams,
       allowedColumns: allowedFilters,
       alias: "o",
     });
 
-    const softDeleteFilter = buildSoftDeleteScope("o", queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([softDeleteFilter, where]);
+    const softDeleteFilter = buildSoftDeleteScope(
+      "o",
+      queryParams.showDeleted || "active"
+    );
+
+    const search = buildGlobalSearch({
+      q: queryParams.q,
+      columns: ["o.id::text", "o.status"],
+      alias: "o",
+    });
+
+    const { whereSql, params } = mergeWhereParts([
+      softDeleteFilter,
+      search,
+      where,
+    ]);
 
     const orderBy =
       buildOrderBy({
@@ -48,33 +77,57 @@ const orderService = {
         alias: "o",
       }) || "ORDER BY o.created_at DESC";
 
+    const selectColumns = buildSelectColumns({
+      alias: "o",
+      columns: [
+        "id",
+        "user_id",
+        "address_id",
+        "total_amount",
+        "status",
+        "placed_at",
+        "paid_at",
+        "created_at",
+        "updated_at",
+      ],
+      showDeleted: queryParams.showDeleted,
+    });
+
     const sql = `
       SELECT 
-        o.id,
-        o.user_id,
-        o.address_id,
-        o.total_amount,
-        o.status,
-        o.placed_at,
-        o.paid_at,
-        o.created_at,
-        o.updated_at,
-        COUNT(oi.id) AS item_count,
-        COALESCE(SUM(oi.quantity), 0) AS total_quantity
+        ${selectColumns},
+        COALESCE(agg.item_count, 0)     AS item_count,
+        COALESCE(agg.total_quantity, 0) AS total_quantity
       FROM orders o
-      LEFT JOIN order_items oi ON oi.order_id = o.id AND oi.deleted_at IS NULL
+      LEFT JOIN (
+        SELECT 
+          order_id,
+          COUNT(*)              AS item_count,
+          COALESCE(SUM(quantity), 0) AS total_quantity
+        FROM order_items
+        WHERE deleted_at IS NULL
+        GROUP BY order_id
+      ) AS agg
+        ON agg.order_id = o.id
       ${whereSql}
-      GROUP BY o.id
       ${orderBy}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
+
     const { rows } = await db.query(sql, [...params, limit, offset]);
 
-    const countSql = `SELECT COUNT(*) AS total FROM orders o ${whereSql}`;
+    const countSql = `
+      SELECT COUNT(*) AS total
+      FROM orders o
+      ${whereSql}
+    `;
     const { rows: countRows } = await db.query(countSql, params);
     const total = Number(countRows[0]?.total || 0);
 
-    return { data: rows, meta: buildPageMeta({ total, page, pageSize }) };
+    return {
+      data: rows,
+      meta: buildPageMeta({ total, page, pageSize }),
+    };
   },
 
   /**
@@ -87,7 +140,9 @@ const orderService = {
         o.id, o.user_id, o.address_id, o.total_amount, o.status,
         o.placed_at, o.paid_at, o.created_at, o.updated_at, o.deleted_at
       FROM orders o
-      WHERE o.id = $1 ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
+      WHERE o.id = $1 ${
+        softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""
+      }
     `;
     const { rows } = await db.query(sql, [id]);
     const order = rows[0];
@@ -120,20 +175,43 @@ const orderService = {
    * Create a new order using mode: 'cart' | 'instant' | 'manual'
    * Each new order automatically creates a corresponding pending payment
    */
-  async createOrder({ mode, user_id, address_id, cart_id, product_id, quantity = 1, items = [] }) {
+  async createOrder({
+    mode,
+    payment_method = "COD",
+    user_id,
+    address_id,
+    cart_id,
+    product_id,
+    item_ids,
+    quantity = 1,
+    items = [],
+  }) {
     if (!mode) {
       const e = new Error("Missing mode (cart, instant, or manual)");
       e.status = 400;
       throw e;
     }
 
+    const method = validate.paymentMethod(payment_method);
+
     switch (mode) {
       case "cart":
-        return await this._createFromCart(cart_id, address_id);
+        return await this._createFromCart(
+          cart_id,
+          address_id,
+          item_ids,
+          method
+        );
 
       case "instant": {
         const { user_id } = getRequestContext();
-        return await this._createInstant(user_id, address_id, product_id, quantity);
+        return await this._createInstant(
+          user_id,
+          address_id,
+          product_id,
+          quantity,
+          method
+        );
       }
 
       case "manual": {
@@ -142,14 +220,6 @@ const orderService = {
           e.status = 400;
           throw e;
         }
-
-        // validate target user exists
-        await ensureUserExists(user_id);
-
-        // validate address belongs to target user
-        await ensureAddressValid(address_id, user_id);
-
-        return await this._createManual(user_id, address_id, items);
       }
 
       default: {
@@ -163,98 +233,119 @@ const orderService = {
   /**
    * Create order directly from a cart (checkout)
    */
-  async _createFromCart(cart_id, address_id) {
+  async _createFromCart(cart_id, address_id, item_ids, payment_method) {
     const client = await db.getClient();
+
     try {
       await client.query("BEGIN");
 
-      // Validate cart
+      if (!Array.isArray(item_ids) || item_ids.length === 0) {
+        throw new Error("item_ids must be a non-empty array");
+      }
+
+      // 1. Validate cart
       const { rows: carts } = await client.query(
-        `SELECT id, user_id, status 
-       FROM carts 
+        `SELECT id, user_id, status
+       FROM carts
        WHERE id = $1 AND deleted_at IS NULL`,
         [cart_id]
       );
+
       if (!carts.length) throw new Error("Cart not found");
       const cart = carts[0];
       if (cart.status !== "ACTIVE") throw new Error("Cart is not ACTIVE");
 
-      // Validate address ownership
+      // 2. Validate address
       await ensureAddressValid(address_id, cart.user_id);
 
-      // Load items
+      const { user_id: ctxUser } = getRequestContext();
+      if (cart.user_id !== ctxUser) {
+        throw new Error("Cart does not belong to current user");
+      }
+
+      // 3. Load ONLY selected items
       const { rows: items } = await client.query(
-        `SELECT ci.product_id, ci.quantity, p.price
-       FROM cart_items ci
-       JOIN products p 
-             ON p.id = ci.product_id AND p.deleted_at IS NULL
-       WHERE ci.cart_id = $1`,
-        [cart_id]
+        `
+      SELECT ci.id AS cart_item_id, ci.product_id, ci.quantity, p.price
+      FROM cart_items ci
+      JOIN products p ON p.id = ci.product_id AND p.deleted_at IS NULL
+      WHERE ci.cart_id = $1
+        AND ci.id = ANY($2::uuid[])
+      `,
+        [cart_id, item_ids]
       );
 
-      if (!items.length) throw new Error("Cart is empty");
+      if (!items.length) {
+        throw new Error("Selected cart items not found");
+      }
 
+      // 4. Deduct stock (atomic, e-commerce safe)
       for (const it of items) {
-        const { rows: stockRows } = await client.query(
-          `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
-          [it.product_id]
+        await inventoryService.deductStockOrFail(
+          client,
+          it.product_id,
+          it.quantity
         );
-        const stock = Number(stockRows[0].stock);
-        const qty = Number(it.quantity);
-
-        if (qty > stock) {
-          throw new Error(
-            `Product ${it.product_id} has only ${stock} units in stock, cannot purchase ${qty}`
-          );
-        }
       }
 
-      // Validate each product
-      for (const it of items) {
-        await ensureProductValid(it.product_id);
-      }
-
-      // Calculate totals
-      let total = 0;
-      const snapshot = items.map((it) => {
-        const qty = Math.max(1, parseInt(it.quantity, 10));
-        const price = Number(it.price);
-        total += qty * price;
-        return { product_id: it.product_id, quantity: qty, price };
-      });
+      // 5. Snapshot
+      const snapshot = items.map((it) => ({
+        product_id: it.product_id,
+        quantity: Math.max(1, Number(it.quantity)),
+        price: Number(it.price),
+      }));
 
       const order_id = uuidv4();
 
-      // Create order
+      // 6. Create order
       const { rows: orderRows } = await client.query(
-        `INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
-       VALUES ($1, $2, $3, $4, 'PENDING', now())
-       RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
-        [order_id, cart.user_id, address_id, total]
+        `
+        INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
+        VALUES (
+          $1,
+          $2,
+          $3,
+          (
+            SELECT COALESCE(SUM(ci.quantity * p.price), 0)
+            FROM cart_items ci
+            JOIN products p ON p.id = ci.product_id
+            WHERE ci.id = ANY($4::uuid[])
+          ),
+          'PENDING',
+          now()
+        )
+        RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at
+        `,
+        [order_id, cart.user_id, address_id, item_ids]
       );
 
-      // Create items
+      // 7. Create order items
       for (const it of snapshot) {
         await client.query(
-          `INSERT INTO order_items (id, order_id, product_id, quantity, price)
-         VALUES ($1, $2, $3, $4, $5)`,
+          `
+          INSERT INTO order_items (id, order_id, product_id, quantity, price)
+          VALUES ($1, $2, $3, $4, $5)
+          `,
           [uuidv4(), order_id, it.product_id, it.quantity, it.price]
         );
       }
 
-      // Create pending payment
+      // 8. Create payment
       await client.query(
-        `INSERT INTO payments (id, order_id, payment_method, amount, status)
-       VALUES ($1, $2, 'COD', $3, 'PENDING')`,
-        [uuidv4(), order_id, total]
+        `
+        INSERT INTO payments (id, order_id, payment_method, amount, status)
+        VALUES ($1, $2, $3, $4, 'PENDING')
+        `,
+        [uuidv4(), order_id, payment_method, orderRows[0].total_amount]
       );
 
-      // Mark cart as checked out
+      // 9. REMOVE ONLY CHECKED-OUT ITEMS
       await client.query(
-        `UPDATE carts 
-       SET status = 'CHECKED_OUT', updated_at = now()
-       WHERE id = $1`,
-        [cart_id]
+        `
+      DELETE FROM cart_items
+      WHERE id = ANY($1::uuid[])
+      `,
+        [item_ids]
       );
 
       await client.query("COMMIT");
@@ -270,64 +361,71 @@ const orderService = {
   /**
    * Create order instantly for a single product ("Buy Now")
    */
-  async _createInstant(user_id, address_id, product_id, quantity = 1) {
+  async _createInstant(
+    user_id,
+    address_id,
+    product_id,
+    quantity,
+    payment_method
+  ) {
     const client = await db.getClient();
     try {
       await client.query("BEGIN");
 
-      // Validate address ownership
+      // 1. Validate address
       await ensureAddressValid(address_id, user_id);
 
-      // Validate product
+      // 2. Validate product exists
       await ensureProductValid(product_id);
 
-      const { rows: stockRows } = await client.query(
-        `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
-        [product_id]
-      );
-      const stock = Number(stockRows[0].stock);
+      // 3. Normalize quantity
+      const qty = Math.max(1, parseInt(quantity, 10));
 
-      if (quantity > stock) {
-        throw new Error(
-          `Product has only ${stock} units in stock, cannot purchase ${quantity}`
-        );
-      }
+      // 4. Atomic stock deduction (e-commerce safe)
+      await inventoryService.deductStockOrFail(client, product_id, qty);
 
-      // Load product price
+      // 5. Load price
       const { rows: pr } = await client.query(
-        `SELECT price 
-       FROM products 
-       WHERE id = $1 AND deleted_at IS NULL`,
+        `
+      SELECT price
+      FROM products
+      WHERE id = $1 AND deleted_at IS NULL
+      `,
         [product_id]
       );
       if (!pr.length) throw new Error("Product not found");
 
       const price = Number(pr[0].price);
-      const qty = Math.max(1, parseInt(quantity, 10));
       const total = qty * price;
 
       const order_id = uuidv4();
 
-      // Create order
+      // 6. Create order
       const { rows: orderRows } = await client.query(
-        `INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
-       VALUES ($1, $2, $3, $4, 'PENDING', now())
-       RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
+        `
+      INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
+      VALUES ($1, $2, $3, $4, 'PENDING', now())
+      RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at
+      `,
         [order_id, user_id, address_id, total]
       );
 
-      // Insert item
+      // 7. Insert order item
       await client.query(
-        `INSERT INTO order_items (id, order_id, product_id, quantity, price)
-       VALUES ($1, $2, $3, $4, $5)`,
+        `
+      INSERT INTO order_items (id, order_id, product_id, quantity, price)
+      VALUES ($1, $2, $3, $4, $5)
+      `,
         [uuidv4(), order_id, product_id, qty, price]
       );
 
-      // Create payment
+      // 8. Create payment
       await client.query(
-        `INSERT INTO payments (id, order_id, payment_method, amount, status)
-       VALUES ($1, $2, 'COD', $3, 'PENDING')`,
-        [uuidv4(), order_id, total]
+        `
+      INSERT INTO payments (id, order_id, payment_method, amount, status)
+      VALUES ($1, $2, $3, $4, 'PENDING')
+      `,
+        [uuidv4(), order_id, payment_method, total]
       );
 
       await client.query("COMMIT");
@@ -339,11 +437,10 @@ const orderService = {
       client.release();
     }
   },
-
   /**
    * Create order manually with provided items (admin use)
    */
-  async _createManual(user_id, address_id, items = []) {
+  async _createManual(user_id, address_id, items = [], payment_method) {
     if (!Array.isArray(items) || !items.length) {
       const e = new Error("Items required");
       e.status = 400;
@@ -360,56 +457,62 @@ const orderService = {
     try {
       await client.query("BEGIN");
 
-      let total = 0;
       const resolvedItems = [];
 
       // Validate items
       for (const it of items) {
         await ensureProductValid(it.product_id);
 
-        const { rows: stockRows } = await client.query(
-          `SELECT stock FROM products WHERE id = $1 AND deleted_at IS NULL`,
-          [it.product_id]
-        );
-        const stock = Number(stockRows[0].stock);
         const qty = Math.max(1, parseInt(it.quantity ?? 1, 10));
 
-        if (qty > stock) {
-          throw new Error(
-            `Product ${it.product_id} has only ${stock} units in stock, cannot place an order for ${qty}`
-          );
-        }
+        // Atomic stock deduction
+        await inventoryService.deductStockOrFail(client, it.product_id, qty);
 
         let price = it.price;
 
-        // If price not provided → load from DB
         if (price == null) {
           const { rows: pr } = await client.query(
-            `SELECT price 
-           FROM products 
-           WHERE id = $1 AND deleted_at IS NULL`,
+            `
+      SELECT price
+      FROM products
+      WHERE id = $1 AND deleted_at IS NULL
+      `,
             [it.product_id]
           );
-
           if (!pr.length) throw new Error("Product not found");
-
           price = Number(pr[0].price);
         }
 
-        if (price < 0) throw Error("Price must be >= 0");
+        if (price < 0) throw new Error("Price must be >= 0");
 
-        total += qty * price;
-        resolvedItems.push({ product_id: it.product_id, quantity: qty, price });
+        resolvedItems.push({
+          product_id: it.product_id,
+          quantity: qty,
+          price,
+        });
       }
 
       const order_id = uuidv4();
 
       // Create order
       const { rows: orderRows } = await client.query(
-        `INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
-       VALUES ($1, $2, $3, $4, 'PENDING', now())
-       RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at`,
-        [order_id, user_id, address_id, total]
+        `
+        INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
+        VALUES (
+          $1,
+          $2,
+          $3,
+          (
+            SELECT COALESCE(SUM(oi.quantity * oi.price), 0)
+            FROM jsonb_to_recordset($4::jsonb)
+              AS oi(product_id uuid, quantity int, price numeric)
+          ),
+          'PENDING',
+          now()
+        )
+        RETURNING id, user_id, address_id, total_amount, status, placed_at, created_at
+        `,
+        [order_id, user_id, address_id, JSON.stringify(resolvedItems)]
       );
 
       // Insert items
@@ -423,9 +526,11 @@ const orderService = {
 
       // Create payment
       await client.query(
-        `INSERT INTO payments (id, order_id, payment_method, amount, status)
-       VALUES ($1, $2, 'COD', $3, 'PENDING')`,
-        [uuidv4(), order_id, total]
+        `
+        INSERT INTO payments (id, order_id, payment_method, amount, status)
+        VALUES ($1, $2, $3, $4, 'PENDING')
+        `,
+        [uuidv4(), order_id, payment_method, orderRows[0].total_amount]
       );
 
       await client.query("COMMIT");
@@ -456,7 +561,7 @@ const orderService = {
 
     const currentStatus = currentRows[0].status;
 
-    // 2. Terminal states 
+    // 2. Terminal states
     if (["COMPLETED", "INACTIVE"].includes(currentStatus)) {
       const err = new Error("Cannot update a completed or cancelled order");
       err.status = 400;
@@ -508,52 +613,88 @@ const orderService = {
    */
   async cancelOrder(id, reason = null) {
     const { user_id } = getRequestContext();
+    const client = await db.getClient();
 
-    // 1. Validate order exists + status
-    const sqlGet = `
+    try {
+      await client.query("BEGIN");
+
+      // 1. Validate order exists + status
+      const { rows: orders } = await client.query(
+        `
       SELECT status
       FROM orders
       WHERE id = $1 AND deleted_at IS NULL
-    `;
-    const { rows } = await db.query(sqlGet, [id]);
-    if (!rows.length) {
-      const e = new Error("Order not found");
-      e.status = 404;
-      throw e;
-    }
+      `,
+        [id]
+      );
 
-    if (rows[0].status !== "PENDING") {
-      const e = new Error("Only PENDING orders can be cancelled");
-      e.status = 400;
-      throw e;
-    }
+      if (!orders.length) {
+        const e = new Error("Order not found");
+        e.status = 404;
+        throw e;
+      }
 
-    // 2. Update order
-    const sql = `
+      if (orders[0].status !== "PENDING") {
+        const e = new Error("Only PENDING orders can be cancelled");
+        e.status = 400;
+        throw e;
+      }
+
+      // 2. Load order items
+      const { rows: items } = await client.query(
+        `
+      SELECT product_id, quantity
+      FROM order_items
+      WHERE order_id = $1 AND deleted_at IS NULL
+      `,
+        [id]
+      );
+
+      // 3. Restore stock
+      for (const it of items) {
+        await client.query(
+          `
+        UPDATE products
+        SET stock = stock + $2
+        WHERE id = $1 AND deleted_at IS NULL
+        `,
+          [it.product_id, it.quantity]
+        );
+      }
+
+      // 4. Update order
+      const { rows: updated } = await client.query(
+        `
       UPDATE orders
-      SET 
+      SET
         status = 'INACTIVE',
         cancel_reason = $2,
         updated_by = $3,
         updated_at = now()
       WHERE id = $1 AND deleted_at IS NULL
       RETURNING id, status, cancel_reason, updated_at
-    `;
-    const { rows: updated } = await db.query(sql, [id, reason, user_id]);
+      `,
+        [id, reason, user_id]
+      );
 
-    // 3. Update payment (optional)
-    const { rowCount: pCount } = await db.query(
-      `UPDATE payments
-        SET status = 'INACTIVE', updated_at = now()
-        WHERE order_id = $1 AND deleted_at IS NULL`,
-      [id]
-    );
+      // 5. Update payment
+      await client.query(
+        `
+      UPDATE payments
+      SET status = 'INACTIVE', updated_at = now()
+      WHERE order_id = $1 AND deleted_at IS NULL
+      `,
+        [id]
+      );
 
-    if (pCount === 0) {
-      console.warn("[WARN] cancelOrder: no payment associated with order", id);
+      await client.query("COMMIT");
+      return updated[0];
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
-
-    return updated[0];
   },
 
   /**
@@ -564,25 +705,29 @@ const orderService = {
     try {
       await client.query("BEGIN");
 
-      // Mark order inactive + soft delete
       const { rowCount } = await client.query(
-        `UPDATE orders SET deleted_at = now(), updated_at = now(), status = 'INACTIVE'
-         WHERE id = $1 AND deleted_at IS NULL`,
+        `UPDATE orders 
+       SET deleted_at = now(), updated_at = now(), status = 'INACTIVE'
+       WHERE id = $1 AND deleted_at IS NULL`,
         [id]
       );
+
       if (rowCount === 0) {
         await client.query("ROLLBACK");
         return false;
       }
 
-      // Soft delete order items and payment
       await client.query(
-        `UPDATE order_items SET deleted_at = now(), updated_at = now() WHERE order_id = $1 AND deleted_at IS NULL`,
+        `UPDATE order_items 
+       SET deleted_at = now(), updated_at = now()
+       WHERE order_id = $1 AND deleted_at IS NULL`,
         [id]
       );
+
       await client.query(
-        `UPDATE payments SET deleted_at = now(), updated_at = now(), status = 'INACTIVE'
-         WHERE order_id = $1 AND deleted_at IS NULL`,
+        `UPDATE payments 
+       SET deleted_at = now(), updated_at = now(), status = 'INACTIVE'
+       WHERE order_id = $1 AND deleted_at IS NULL`,
         [id]
       );
 

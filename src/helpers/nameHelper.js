@@ -7,8 +7,8 @@
 /**
  * Normalize and sanitize name fields.
  * - Always trims input values.
- * - If only first_name or last_name is provided → combine to full_name.
- * - If only full_name is provided → split into first_name + last_name.
+ * - If only first_name or last_name is provided â†’ combine to full_name.
+ * - If only full_name is provided â†’ split into first_name + last_name.
  * - Returns sanitized string values or null.
  *
  * @param {Object} input
@@ -18,7 +18,7 @@
  * @returns {{ full_name: string|null, first_name: string|null, last_name: string|null }}
  */
 export function normalizeName({ full_name, first_name, last_name }) {
-  // Sanitize input (trim & convert empty string → null)
+  // Sanitize input (trim & convert empty string â†’ null)
   full_name = typeof full_name === "string" ? full_name.trim() : null;
   first_name = typeof first_name === "string" ? first_name.trim() : null;
   last_name = typeof last_name === "string" ? last_name.trim() : null;

@@ -13,6 +13,9 @@ import paymentRoutes from "./paymentRoutes.js";
 import authRoutes from "./authRoutes.js";
 import uploadRoutes from "./uploadRoutes.js";
 import restoreRoutes from "./restoreRoutes.js";
+import dashboardRoutes from "./dashboardRoutes.js";
+import searchRoutes from "./searchRoutes.js";
+import vnpayRoutes from "./vnpayRoutes.js";
 
 /**
  * Main router entry point.
@@ -21,6 +24,7 @@ import restoreRoutes from "./restoreRoutes.js";
 const router = express.Router();
 
 // Base path for all API modules
+router.use("/vnpay", vnpayRoutes);
 router.use("/users", userRoutes);
 router.use("/authors", authorRoutes);
 router.use("/publishers", publisherRoutes);
@@ -35,6 +39,8 @@ router.use("/payments", paymentRoutes);
 router.use("/auth", authRoutes);
 router.use("/upload", uploadRoutes);
 router.use("/restore", restoreRoutes);
+router.use("/admin/dashboard", dashboardRoutes);
+router.use("/search", searchRoutes);
 
 // Health check endpoint for quick testing
 router.get("/health", (req, res) => {

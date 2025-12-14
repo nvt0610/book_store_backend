@@ -17,7 +17,7 @@ router.post("/merge", requireAuth, cartController.mergeGuestToUser);
  */
 router.use(requireAuth);
 
-// User gets own cart — USE TOKEN
+// User gets own cart
 router.get("/me", cartController.getMyCart);
 
 // Admin or user (owner) get cart by ID

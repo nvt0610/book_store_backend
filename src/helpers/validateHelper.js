@@ -5,6 +5,8 @@
 
 import { validate as isUuid } from "uuid";
 
+const PAYMENT_METHODS = ["COD", "MOMO", "VNPAY", "CREDIT_CARD"];
+
 const validateHelper = {
   /* ---------------------------------------------------------------------- */
   /*  BASIC STRING VALIDATION                                               */
@@ -21,7 +23,7 @@ const validateHelper = {
     return value;
   },
 
-  /** normalize strings like "   abc   " → "abc" */
+  /** normalize strings like "   abc   " â†’ "abc" */
   trimString(value, fieldName) {
     if (typeof value !== "string") return value;
     const trimmed = value.trim();
@@ -139,9 +141,7 @@ const validateHelper = {
 
   enum(value, allowed, fieldName) {
     if (!allowed.includes(value)) {
-      throw new Error(
-        `${fieldName} must be one of: ${allowed.join(", ")}`
-      );
+      throw new Error(`${fieldName} must be one of: ${allowed.join(", ")}`);
     }
   },
 
@@ -151,7 +151,15 @@ const validateHelper = {
 
   url(value, fieldName) {
     if (!value) return;
+
+    // Accept backend-generated relative URLs (e.g., "/img/xxx.webp")
+    // because new URL() requires an absolute URL.
+    if (typeof value === "string" && value.startsWith("/")) {
+      return;
+    }
+
     try {
+      // Validate absolute URLs normally
       new URL(value);
     } catch {
       throw new Error(`${fieldName} must be a valid URL`);
@@ -185,6 +193,37 @@ const validateHelper = {
     }
   },
 
+  phoneNumber(value, fieldName = "phone") {
+    if (!value) return;
+    const trimmed = String(value).trim();
+
+    // Chỉ cho phép 0-9, tối thiểu 8 – tối đa 20 số
+    if (!/^[0-9]{8,20}$/.test(trimmed)) {
+      throw new Error(`${fieldName} must contain digits only (8-20 digits)`);
+    }
+  },
+
+  /* ---------------------------------------------------------------------- */
+  /*  PAYMENT METHOD VALIDATION                                             */
+  /* ---------------------------------------------------------------------- */
+
+  paymentMethod(value, fieldName = "payment_method") {
+    if (value == null) return "COD"; // default
+
+    if (typeof value !== "string") {
+      throw new Error(`${fieldName} must be a string`);
+    }
+
+    const normalized = value.trim().toUpperCase();
+
+    if (!PAYMENT_METHODS.includes(normalized)) {
+      throw new Error(
+        `${fieldName} must be one of: ${PAYMENT_METHODS.join(", ")}`
+      );
+    }
+
+    return normalized;
+  },
 };
 
 export default validateHelper;

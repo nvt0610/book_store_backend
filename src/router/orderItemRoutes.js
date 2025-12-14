@@ -5,14 +5,13 @@ import { requireRole } from "../middlewares/requireRole.js";
 
 const router = express.Router();
 
-// ADMIN ONLY
 router.use(requireAuth);
-router.use(requireRole("ADMIN"));
 
-router.get("/", orderItemController.list);
-router.get("/:id", orderItemController.getById);
-router.post("/", orderItemController.create);
-router.put("/:id", orderItemController.update);
-router.delete("/:id", orderItemController.remove);
+// ADMIN ONLY ROUTES
+router.get("/", requireRole("ADMIN"), orderItemController.list);
+router.get("/:id", requireRole("ADMIN"), orderItemController.getById);
+router.post("/", requireRole("ADMIN"), orderItemController.create);
+router.put("/:id", requireRole("ADMIN"), orderItemController.update);
+router.delete("/:id", requireRole("ADMIN"), orderItemController.remove);
 
 export default router;

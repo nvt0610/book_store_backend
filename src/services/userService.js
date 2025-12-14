@@ -12,7 +12,7 @@ const { buildFiltersWhere, mergeWhereParts, buildOrderBy, buildGlobalSearch, bui
 
 /**
  * Service layer for handling user-related CRUD operations.
- * This layer interacts with the database only — no HTTP or response logic.
+ * This layer interacts with the database only â€” no HTTP or response logic.
  */
 const userService = {
     /**
@@ -39,6 +39,7 @@ const userService = {
 
         const where = buildFiltersWhere({
             filters,
+            rawQuery: queryParams,
             allowedColumns,
             alias: "u",
         });
@@ -131,7 +132,7 @@ const userService = {
         const id = uuidv4();
         const { full_name, first_name, last_name } = normalizeName(data);
 
-        // ✅ Hash password trước khi lưu
+        // Hash password 
         const hashedPassword = await passwordHelper.hashPassword(data.password);
 
         const sql = `
@@ -163,7 +164,7 @@ const userService = {
     async updateUser(id, data) {
         const { full_name, first_name, last_name } = normalizeName(data);
 
-        // ✅ Nếu có gửi password mới → hash lại
+        // hash password if provided
         let hashedPassword = null;
         if (data.password) {
             hashedPassword = await passwordHelper.hashPassword(data.password);
@@ -198,11 +199,29 @@ const userService = {
         return rows[0] || null;
     },
 
+    async setStatus(id, status) {
+        if (!["ACTIVE", "INACTIVE"].includes(status)) {
+            const e = new Error("Invalid status value");
+            e.status = 400;
+            throw e;
+        }
+
+        const sql = `
+      UPDATE users
+      SET status = $2, updated_at = now()
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING id, full_name, email, phone, role, status, updated_at
+    `;
+
+        const { rows } = await db.query(sql, [id, status]);
+        return rows[0] || null;
+    },
+
     /**
  * Soft delete user:
- * - Đánh dấu deleted_at = now()
- * - Đổi status sang 'INACTIVE'
- * @param {string} id - UUID của user
+ * - ÄĂ¡nh dáº¥u deleted_at = now()
+ * - Äá»•i status sang 'INACTIVE'
+ * @param {string} id - UUID cá»§a user
  * @returns {Promise<boolean>}
  */
     async deleteUser(id) {

@@ -72,3 +72,6 @@ reports/
 # Postman collections and config
 .postman/
 postman/
+
+# Ignore all public assets (uploaded files, images, etc.)
+src/public/

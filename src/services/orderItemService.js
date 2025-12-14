@@ -47,6 +47,7 @@ const orderItemService = {
 
     const where = buildFiltersWhere({
       filters,
+      rawQuery: queryParams,
       allowedColumns: allowedFilters,
       alias: "oi",
     });
@@ -309,7 +310,7 @@ const orderItemService = {
 
     // Recalculate total if deleted
     if (rowCount > 0) {
-      await recalcOrderTotal(data.order_id);
+      await recalcOrderTotal(order_id);
       return true;
     }
 

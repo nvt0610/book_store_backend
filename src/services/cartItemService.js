@@ -19,7 +19,7 @@ const cartItemService = {
 
   /**
    * List cart items (admin use)
-   * Note: Hard delete → no deleted_at filter anymore
+   * Note: Hard delete â†’ no deleted_at filter anymore
    */
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
@@ -29,6 +29,7 @@ const cartItemService = {
 
     const where = buildFiltersWhere({
       filters,
+      rawQuery: queryParams,
       allowedColumns: allowedFilters,
       alias: "ci",
     });
@@ -124,8 +125,8 @@ const cartItemService = {
 
   /**
    * Add an item into cart
-   * If exists → increase quantity
-   * If not → insert new item
+   * If exists â†’ increase quantity
+   * If not â†’ insert new item
    */
   async addItem(cart_id, product_id, quantity = 1) {
     if (quantity <= 0) {
@@ -153,7 +154,7 @@ const cartItemService = {
       throw e;
     }
 
-    // Check duplicate (hard delete → no deleted_at filter)
+    // Check duplicate (hard delete â†’ no deleted_at filter)
     const existingSql = `
       SELECT id, quantity
       FROM cart_items

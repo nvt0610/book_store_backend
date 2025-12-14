@@ -10,13 +10,13 @@ import { requireCartOwnerOrAdmin } from "../middlewares/requireOwnerOrAdmin.js";
 const router = express.Router();
 
 /**
- * PUBLIC — guest + authenticated user
+ * PUBLIC â€” guest + authenticated user
  * Guest must send guest_token
  * User must own the cart
  * Admin bypass
  */
 router.post("/", requireCartOwnerOrAdmin("cart_id"), cartItemController.addItem);
-router.patch("/:itemId", requireCartOwnerOrAdmin(null, "itemId"), cartItemController.updateQuantity);
+router.put("/:itemId", requireCartOwnerOrAdmin(null, "itemId"), cartItemController.updateQuantity);
 router.delete("/:itemId", requireCartOwnerOrAdmin(null, "itemId"), cartItemController.removeItem);
 router.delete("/", requireCartOwnerOrAdmin("cart_id"), cartItemController.clear);
 

@@ -42,7 +42,7 @@ const cartController = {
     try {
       const token = validate.trimString(req.body.guest_token, "guest_token");
       validate.required(token, "guest_token");
-      validate.maxLength(token, 200, "guest_token"); // tránh spam payload
+      validate.maxLength(token, 200, "guest_token"); // trĂ¡nh spam payload
 
       const result = await cartService.getOrCreateGuestCart(token);
 

@@ -13,6 +13,7 @@ export default {
   app: {
     port: parseInt(getEnv("PORT", 3000)),
     nodeEnv: getEnv("NODE_ENV", "development"),
+    publicUrl: getEnv("APP_PUBLIC_URL"),
   },
 
   db: {
@@ -27,5 +28,19 @@ export default {
 
   log: {
     level: getEnv("LOG_LEVEL", "info"),
+  },
+
+  // =====================
+  // VNPAY
+  // =====================
+  vnpay: {
+    tmnCode: getEnv("VNPAY_TMN_CODE"),
+    hashSecret: getEnv("VNPAY_HASH_SECRET"),
+    paymentUrl: getEnv(
+      "VNPAY_PAYMENT_URL",
+      "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html"
+    ),
+    returnUrl: getEnv("VNPAY_RETURN_URL"),
+    ipnUrl: getEnv("VNPAY_IPN_URL"),
   },
 };
