@@ -4,6 +4,7 @@ import validate from "../helpers/validateHelper.js";
 import vnpayConfig from "../integrations/vnpay.config.js";
 import { verifyVnpayReturn } from "../integrations/vnpay.helper.js";
 import vnpayService from "../services/vnpayService.js";
+import env from "../config/env.js";
 
 const R = responseHelper;
 
@@ -60,13 +61,16 @@ const vnpayController = {
     try {
       const verify = verifyVnpayReturn(req.query, vnpayConfig.hashSecret);
       if (!verify.ok) {
-        return res.status(400).send("Invalid signature");
+        const redirectUrl = new URL("/checkout", env.app.frontendUrl);
+        redirectUrl.searchParams.set("success", "0");
+        redirectUrl.searchParams.set("code", "INVALID_SIGNATURE");
+        return res.redirect(redirectUrl.toString());
       }
 
       const result = vnpayService.buildReturnResult(req.query);
 
-      const feBase = process.env.FRONTEND_PUBLIC_URL || "http://localhost:5173";
-      const redirectUrl = new URL("/checkout", feBase);
+      const feBase = env.app.frontendUrl;
+      const redirectUrl = new URL("/checkout/result", feBase);
 
       redirectUrl.searchParams.set("success", result.success ? "1" : "0");
       redirectUrl.searchParams.set("code", result.code);

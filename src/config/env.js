@@ -1,4 +1,3 @@
-// src/config/env.js
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -14,6 +13,7 @@ export default {
     port: parseInt(getEnv("PORT", 3000)),
     nodeEnv: getEnv("NODE_ENV", "development"),
     publicUrl: getEnv("APP_PUBLIC_URL"),
+    frontendUrl: getEnv("FRONTEND_PUBLIC_URL", "http://localhost:5173"),
   },
 
   db: {
