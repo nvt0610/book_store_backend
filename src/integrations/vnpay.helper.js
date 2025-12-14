@@ -84,17 +84,34 @@ export function buildPaymentUrl(paymentUrlBase, params, hashSecret) {
   return `${paymentUrlBase}?${signData}&vnp_SecureHash=${secureHash}`;
 }
 
-export function verifyVnpayReturn(req, hashSecret) {
-  const params = { ...req.query };
+/**
+ * Verify VNPAY return / IPN signature.
+ *
+ * IMPORTANT:
+ * - VNPAY signs the RFC1738 query string (space = '+')
+ * - Express already decodes query params, so we MUST re-stringify
+ *   using RFC1738 to match VNPAY's original signing string.
+ * - Always remove vnp_SecureHash and vnp_SecureHashType before hashing.
+ *
+ * @param {Object} query - req.query from Express
+ * @param {string} hashSecret - VNPAY hash secret
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function verifyVnpayReturn(query, hashSecret) {
+  // Clone query to avoid mutating original object
+  const params = { ...query };
 
   const receivedHash = params.vnp_SecureHash;
   if (!receivedHash) {
+    console.error("[VNPAY VERIFY] Missing vnp_SecureHash", params);
     return { ok: false, reason: "Missing vnp_SecureHash" };
   }
 
+  // Remove hash fields
   delete params.vnp_SecureHash;
   delete params.vnp_SecureHashType;
 
+  // Keep only vnp_* params and sort by key ASC
   const sortedParams = Object.keys(params)
     .filter((k) => k.startsWith("vnp_"))
     .sort()
@@ -103,6 +120,12 @@ export function verifyVnpayReturn(req, hashSecret) {
       return acc;
     }, {});
 
+  /**
+   * CRITICAL:
+   * - Use RFC1738 encoding
+   * - Space must be converted to '+'
+   * - This MUST match VNPAY signing behavior
+   */
   const signData = qs.stringify(sortedParams, {
     encode: true,
     format: "RFC1738",
@@ -110,12 +133,27 @@ export function verifyVnpayReturn(req, hashSecret) {
 
   const calculatedHash = crypto
     .createHmac("sha512", hashSecret)
-    .update(signData)
+    .update(signData, "utf-8")
     .digest("hex");
 
-  return calculatedHash === receivedHash
-    ? { ok: true }
-    : { ok: false, reason: "Invalid signature" };
+  // Debug mismatch
+  if (calculatedHash !== receivedHash) {
+    console.error("[VNPAY VERIFY] Signature mismatch", {
+      signData,
+      calculatedHash,
+      receivedHash,
+      sortedParams,
+    });
+
+    return { ok: false, reason: "Invalid signature" };
+  }
+
+  console.log("[VNPAY VERIFY] Signature valid", {
+    vnp_TxnRef: sortedParams.vnp_TxnRef,
+    vnp_ResponseCode: sortedParams.vnp_ResponseCode,
+  });
+
+  return { ok: true };
 }
 
 export function getClientIp(req) {

@@ -625,29 +625,7 @@ const orderService = {
         throw e;
       }
 
-      // 2. Load order items
-      const { rows: items } = await client.query(
-        `
-      SELECT product_id, quantity
-      FROM order_items
-      WHERE order_id = $1 AND deleted_at IS NULL
-      `,
-        [id]
-      );
-
-      // 3. Restore stock
-      for (const it of items) {
-        await client.query(
-          `
-        UPDATE products
-        SET stock = stock + $2
-        WHERE id = $1 AND deleted_at IS NULL
-        `,
-          [it.product_id, it.quantity]
-        );
-      }
-
-      // 4. Update order
+      // 2. Update order
       const { rows: updated } = await client.query(
         `
       UPDATE orders
@@ -662,7 +640,7 @@ const orderService = {
         [id, reason, user_id]
       );
 
-      // 5. Update payment
+      // 3. Update payment
       await client.query(
         `
       UPDATE payments

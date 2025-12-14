@@ -11,8 +11,8 @@ const router = express.Router();
 router.use(requireAuth);
 
 // ORDER 
-//router.post("/order/:order_id/complete", requireRole("ADMIN"), paymentController.markCompletedByOrder);
-//router.post("/order/:order_id/cancel", requireRole("ADMIN"), paymentController.cancelPendingByOrder);
+router.post("/order/:order_id/complete", requireRole("ADMIN"), paymentController.markCompletedByOrder);
+router.post("/order/:order_id/cancel", requireRole("ADMIN"), paymentController.cancelPendingByOrder);
 router.get("/order/:order_id", requireOwnerOrAdmin("orders"), paymentController.listByOrder);
 
 // List all

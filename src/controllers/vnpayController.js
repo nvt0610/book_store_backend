@@ -87,6 +87,7 @@ const vnpayController = {
   async returnUrl(req, res) {
     try {
       const verify = verifyVnpayReturn(req.query, vnpayConfig.hashSecret);
+
       if (!verify.ok) {
         const redirectUrl = new URL("/checkout", env.app.frontendUrl);
         redirectUrl.searchParams.set("success", "0");
@@ -94,17 +95,13 @@ const vnpayController = {
         return res.redirect(redirectUrl.toString());
       }
 
+      await vnpayService.maybeCompleteFromReturn(req.query);
+
       const result = vnpayService.buildReturnResult(req.query);
 
-      const redirectUrl = new URL(
-        "/checkout/result",
-        env.app.frontendUrl
-      );
+      const redirectUrl = new URL("/checkout/result", env.app.frontendUrl);
 
-      redirectUrl.searchParams.set(
-        "success",
-        result.success ? "1" : "0"
-      );
+      redirectUrl.searchParams.set("success", result.success ? "1" : "0");
       redirectUrl.searchParams.set("code", result.code);
       redirectUrl.searchParams.set("payment_id", result.payment_id);
 

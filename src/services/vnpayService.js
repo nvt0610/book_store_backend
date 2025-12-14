@@ -1,7 +1,7 @@
 import db from "../db/db.js";
 import { v4 as uuidv4 } from "uuid";
 import { getRequestContext } from "../middlewares/requestContext.js";
-
+import paymentService from "./paymentService.js";
 import vnpayConfig from "../integrations/vnpay.config.js";
 import {
   buildPaymentUrl,
@@ -230,8 +230,9 @@ const vnpayService = {
       await client.query("BEGIN");
 
       const ok = isVnpaySuccess(vnpQuery);
+      const isSuccess = isVnpaySuccess(vnpQuery);
 
-      if (!ok) {
+      if (!isSuccess) {
         await client.query(
           `
         UPDATE payments
@@ -287,6 +288,72 @@ const vnpayService = {
       payment_id: String(vnpQuery.vnp_TxnRef || ""),
       orderInfo: String(vnpQuery.vnp_OrderInfo || ""),
     };
+  },
+
+  /**
+   * Fallback completion for ReturnURL (sandbox-safe).
+   * - Do NOT trust it blindly
+   * - Only complete if:
+   *   + signature already verified
+   *   + success codes
+   *   + payment exists & not completed
+   */
+  async maybeCompleteFromReturn(vnpQuery) {
+    // 1. Chỉ xử lý khi SUCCESS thật
+    if (!isVnpaySuccess(vnpQuery)) {
+      return;
+    }
+
+    const paymentId = String(vnpQuery.vnp_TxnRef || "");
+    if (!paymentId) return;
+
+    // 2. Load payment + order
+    const { rows } = await db.query(
+      `
+    SELECT p.id, p.order_id, p.amount, p.status
+    FROM payments p
+    JOIN orders o ON o.id = p.order_id AND o.deleted_at IS NULL
+    WHERE p.id = $1
+      AND p.deleted_at IS NULL
+    LIMIT 1
+    `,
+      [paymentId]
+    );
+
+    if (!rows.length) return;
+
+    const pay = rows[0];
+
+    // 3. Idempotent: nếu IPN đã xử lý → thôi
+    if (pay.status === "COMPLETED") {
+      return;
+    }
+
+    // 4. Validate amount (defensive)
+    const vnpAmount = Number(vnpQuery.vnp_Amount || 0);
+    const localAmount = Math.round(Number(pay.amount) * 100);
+    if (!Number.isFinite(vnpAmount) || vnpAmount !== localAmount) {
+      return;
+    }
+
+    // 5. Complete order (same core logic as IPN)
+    const client = await db.getClient();
+    try {
+      await client.query("BEGIN");
+
+      await paymentService.completeOrderPayment(
+        pay.order_id,
+        { via: "RETURN", gateway: "VNPAY" },
+        client
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("[VNPAY RETURN FALLBACK]", err);
+    } finally {
+      client.release();
+    }
   },
 };
 

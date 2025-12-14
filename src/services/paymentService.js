@@ -496,7 +496,7 @@ const paymentService = {
       for (const it of items) {
         await client.query(
           `
-        UPDATE products
+            UPDATE products
         SET stock = stock - $2,
             updated_at = now()
         WHERE id = $1

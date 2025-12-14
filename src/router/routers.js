@@ -47,4 +47,9 @@ router.get("/health", (req, res) => {
   res.status(200).json({ success: true, message: "API is healthy" });
 });
 
+router.use((req, res, next) => {
+  console.log(">>> API ROUTER:", req.method, req.originalUrl);
+  next();
+});
+
 export default router;

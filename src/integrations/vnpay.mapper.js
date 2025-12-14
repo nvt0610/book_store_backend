@@ -1,3 +1,5 @@
+import { VNPAY_SUCCESS_STATUS } from "./vnpay.codes.js";
+
 export function mapVnpayToGatewayPayload(vnpQuery = {}) {
   // Store only vnp_* keys, keep full raw for audit
   const payload = {};
@@ -13,9 +15,13 @@ export function parseVnpPayDate(vnpPayDate) {
   return vnpPayDate || null;
 }
 
-export function isVnpaySuccess(vnpQuery = {}) {
+export function isVnpaySuccess(vnpQuery) {
   return (
-    String(vnpQuery.vnp_ResponseCode) === "00" &&
-    String(vnpQuery.vnp_TransactionStatus) === "00"
+    VNPAY_SUCCESS_STATUS.RESPONSE_CODE.includes(
+      String(vnpQuery.vnp_ResponseCode)
+    ) &&
+    VNPAY_SUCCESS_STATUS.TRANSACTION_STATUS.includes(
+      String(vnpQuery.vnp_TransactionStatus)
+    )
   );
 }
