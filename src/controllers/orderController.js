@@ -140,6 +140,33 @@ const orderController = {
     }
   },
 
+  /**
+   * Buy again from previous order (create NEW order)
+   * POST /orders/buy-again
+   */
+  async buyAgain(req, res) {
+    try {
+      const { source_order_id, address_id, payment_method } = req.body;
+
+      // Validate input
+      validate.uuid(source_order_id, "source_order_id");
+      validate.uuid(address_id, "address_id");
+
+      const method = validate.paymentMethod(payment_method);
+
+      const order = await orderService.buyAgain({
+        source_order_id,
+        address_id,
+        payment_method: method,
+      });
+
+      return R.created(res, order, "Order created via Buy Again");
+    } catch (err) {
+      console.error("[orderController.buyAgain]", err);
+      return R.badRequest(res, err.message);
+    }
+  },
+
   /** cancel order (customer) */
   async cancel(req, res) {
     try {

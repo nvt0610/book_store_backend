@@ -76,11 +76,9 @@ const paymentController = {
       if (body.payment_method)
         validate.enum(body.payment_method, PAYMENT_METHODS, "payment_method");
 
-      if (body.amount != null)
-        validate.positive(body.amount, "amount");
+      if (body.amount != null) validate.positive(body.amount, "amount");
 
-      if (body.status)
-        validate.enum(body.status, PAYMENT_STATUS, "status");
+      if (body.status) validate.enum(body.status, PAYMENT_STATUS, "status");
 
       if (body.payment_ref)
         validate.trimString(body.payment_ref, "payment_ref");
@@ -90,7 +88,6 @@ const paymentController = {
       return updated
         ? R.ok(res, updated, "Payment updated")
         : R.notFound(res, "Payment not found");
-
     } catch (err) {
       console.error("[paymentController.update]", err);
       return R.badRequest(res, err.message);
@@ -125,6 +122,27 @@ const paymentController = {
     } catch (err) {
       console.error("[paymentController.markCompletedByOrder]", err);
       return R.internalError(res, err.message);
+    }
+  },
+
+  /** Customer retry payment for an order */
+  async retryPayment(req, res) {
+    try {
+      const { order_id } = req.params;
+      const { payment_method } = req.body;
+
+      validate.uuid(order_id, "order_id");
+      validate.enum(payment_method, PAYMENT_METHODS, "payment_method");
+
+      const result = await paymentService.retryPaymentForOrder(
+        order_id,
+        payment_method
+      );
+
+      return R.ok(res, result, "Payment retried successfully");
+    } catch (err) {
+      console.error("[paymentController.retryPayment]", err);
+      return R.badRequest(res, err.message);
     }
   },
 

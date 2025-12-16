@@ -543,6 +543,51 @@ const paymentService = {
     }
   },
 
+  async retryPaymentForOrder(order_id, payment_method) {
+    const client = await db.getClient();
+    try {
+      await client.query("BEGIN");
+
+      // 1. Lock order
+      const { rows: orderRows } = await client.query(
+        `SELECT status FROM orders
+       WHERE id = $1 AND deleted_at IS NULL
+       FOR UPDATE`,
+        [order_id]
+      );
+
+      if (!orderRows.length) throw new Error("Order not found");
+      if (orderRows[0].status !== "PENDING")
+        throw new Error("Order is not payable");
+
+      // 2. Cancel old pending payments
+      await client.query(
+        `UPDATE payments
+       SET status = 'INACTIVE', updated_at = now()
+       WHERE order_id = $1 AND status = 'PENDING'`,
+        [order_id]
+      );
+
+      // 3. Create new payment
+      const { rows } = await client.query(
+        `INSERT INTO payments (id, order_id, payment_method, amount, status)
+       SELECT $1, o.id, $2, o.total_amount, 'PENDING'
+       FROM orders o
+       WHERE o.id = $3
+       RETURNING *`,
+        [uuidv4(), payment_method, order_id]
+      );
+
+      await client.query("COMMIT");
+      return rows[0];
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
   /**
    * Cancel all pending payments of an order (set status = INACTIVE)
    * Does NOT touch order.status (order cancel is handled by orderService.cancelOrder).

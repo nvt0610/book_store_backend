@@ -9,6 +9,7 @@ const router = express.Router();
 // CUSTOMER + ADMIN
 router.post("/from-cart", requireAuth, orderController.createFromCart);
 router.post("/buy-now", requireAuth, orderController.buyNow);
+router.post("/buy-again", requireAuth, orderController.buyAgain);
 router.get("/", requireAuth, orderController.list);
 
 router.get("/:id", requireAuth, requireOwnerOrAdmin("orders"), orderController.getById);

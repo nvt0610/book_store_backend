@@ -277,6 +277,92 @@ const orderService = {
   },
 
   /**
+   * Buy again from previous order (create NEW order)
+   */
+  async buyAgain({ source_order_id, address_id, payment_method = "COD" }) {
+    const client = await db.getClient();
+    const { user_id } = getRequestContext();
+
+    try {
+      await client.query("BEGIN");
+
+      // 1. Load source order (ownership check)
+      const { rows: orders } = await client.query(
+        `
+      SELECT id, user_id
+      FROM orders
+      WHERE id = $1 AND deleted_at IS NULL
+      `,
+        [source_order_id]
+      );
+      if (!orders.length) throw new Error("Source order not found");
+      if (orders[0].user_id !== user_id)
+        throw new Error("Order does not belong to user");
+
+      // 2. Load order items (snapshot source)
+      const { rows: items } = await client.query(
+        `
+      SELECT product_id, quantity, price
+      FROM order_items
+      WHERE order_id = $1 AND deleted_at IS NULL
+      `,
+        [source_order_id]
+      );
+      if (!items.length) throw new Error("No items to reorder");
+
+      // 3. Validate address
+      await ensureAddressValid(address_id, user_id);
+
+      // 4. Re-validate stock + price (important)
+      let total = 0;
+      for (const it of items) {
+        await ensureProductValid(it.product_id);
+        total += Number(it.quantity) * Number(it.price);
+      }
+
+      const order_id = uuidv4();
+
+      // 5. Create new order
+      const { rows: orderRows } = await client.query(
+        `
+      INSERT INTO orders (id, user_id, address_id, total_amount, status, placed_at)
+      VALUES ($1, $2, $3, $4, 'PENDING', now())
+      RETURNING id, total_amount
+      `,
+        [order_id, user_id, address_id, total]
+      );
+
+      // 6. Insert order items
+      for (const it of items) {
+        await client.query(
+          `
+        INSERT INTO order_items (id, order_id, product_id, quantity, price)
+        VALUES ($1, $2, $3, $4, $5)
+        `,
+          [uuidv4(), order_id, it.product_id, it.quantity, it.price]
+        );
+      }
+
+      // 7. Create payment
+      await client.query(
+        `
+      INSERT INTO payments (id, order_id, payment_method, amount, status)
+      VALUES ($1, $2, $3, $4, 'PENDING')
+      `,
+        [uuidv4(), order_id, payment_method, total]
+      );
+
+      await client.query("COMMIT");
+      return { id: order_id, total_amount: total };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
    * Create order directly from a cart (checkout)
    */
   async _createFromCart(cart_id, address_id, item_ids, payment_method) {
