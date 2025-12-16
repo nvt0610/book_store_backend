@@ -149,7 +149,8 @@ const orderService = {
         o.paid_at,
         o.created_at,
         o.updated_at,
-        o.deleted_at
+        o.deleted_at,
+        o.cancel_reason
       FROM orders o
       WHERE o.id = $1
       ${softDeleteFilter.sql ? `AND ${softDeleteFilter.sql}` : ""}
@@ -266,6 +267,7 @@ const orderService = {
           e.status = 400;
           throw e;
         }
+        return await this._createManual(user_id, address_id, items, method);
       }
 
       default: {

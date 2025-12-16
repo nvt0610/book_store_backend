@@ -379,8 +379,8 @@ const paymentService = {
    * @param {string|null} options.gateway
    * @param {Object|null} externalClient
    */
-  async completeOrderPayment(
-    order_id,
+  async completePayment(
+    payment_id,
     { via = "COD", gateway = null } = {},
     externalClient = null
   ) {
@@ -390,69 +390,44 @@ const paymentService = {
     if (!isOuterTx) await client.query("BEGIN");
 
     try {
-      // 1. Load order status (idempotency)
-      const { rows: orderRows } = await client.query(
-        `
-      SELECT status
-    FROM orders
-    WHERE id = $1 AND deleted_at IS NULL
-    FOR UPDATE
-      `,
-        [order_id]
-      );
-
-      if (!orderRows.length) {
-        const e = new Error("Order not found");
-        e.status = 404;
-        throw e;
-      }
-
-      if (orderRows[0].status === "COMPLETED") {
-        if (!isOuterTx) await client.query("COMMIT");
-        return { order_id, alreadyCompleted: true };
-      }
-
-      // 2. Load latest pending payment
       const { rows: payRows } = await client.query(
         `
-      SELECT id, payment_method
-    FROM payments
-    WHERE order_id = $1
-    AND deleted_at IS NULL
-    AND status = 'PENDING'
-    ORDER BY created_at DESC
-    LIMIT 1
-    FOR UPDATE
+      SELECT id, order_id, payment_method, status
+      FROM payments
+      WHERE id = $1
+        AND deleted_at IS NULL
+      FOR UPDATE
       `,
-        [order_id]
+        [payment_id]
       );
 
       if (!payRows.length) {
-        const e = new Error("No pending payment found for this order");
+        const e = new Error("Payment not found");
         e.status = 404;
         throw e;
       }
 
-      const { id: payment_id, payment_method } = payRows[0];
+      const payment = payRows[0];
 
-      // 3. Validate completion source
-      if (via === "COD" && payment_method !== "COD") {
-        const e = new Error(
-          "Only COD payments can be manually completed by admin"
-        );
+      if (payment.status === "COMPLETED") {
+        if (!isOuterTx) await client.query("COMMIT");
+        return { payment_id, alreadyCompleted: true };
+      }
+
+      if (payment.status !== "PENDING") {
+        const e = new Error("Only pending payments can be completed");
         e.status = 400;
         throw e;
       }
 
-      if (via === "GATEWAY" && payment_method === "COD") {
-        const e = new Error(
-          "COD payment cannot be completed via payment gateway"
-        );
+      if (via === "COD" && payment.payment_method !== "COD") {
+        const e = new Error("Only COD payments can be manually completed");
         e.status = 400;
         throw e;
       }
 
-      // 4. Load order items
+      const order_id = payment.order_id;
+
       const { rows: items } = await client.query(
         `
       SELECT product_id, quantity
@@ -463,9 +438,8 @@ const paymentService = {
         [order_id]
       );
 
-      // 5. Check stock availability (LOCK rows)
       for (const it of items) {
-        const { rows: stockRows } = await client.query(
+        const { rows } = await client.query(
           `
         SELECT stock
         FROM products
@@ -476,27 +450,17 @@ const paymentService = {
           [it.product_id]
         );
 
-        if (!stockRows.length) {
-          throw new Error(`Product ${it.product_id} not found`);
-        }
-
-        const stock = Number(stockRows[0].stock);
-        const qty = Number(it.quantity);
-
-        if (stock < qty) {
-          const e = new Error(
-            `Insufficient stock for product ${it.product_id}`
-          );
+        if (!rows.length || Number(rows[0].stock) < Number(it.quantity)) {
+          const e = new Error("Insufficient stock");
           e.status = 400;
           throw e;
         }
       }
 
-      // 6. Deduct stock
       for (const it of items) {
         await client.query(
           `
-            UPDATE products
+        UPDATE products
         SET stock = stock - $2,
             updated_at = now()
         WHERE id = $1
@@ -506,7 +470,6 @@ const paymentService = {
         );
       }
 
-      // 7. Mark payment as completed
       await client.query(
         `
       UPDATE payments
@@ -515,12 +478,10 @@ const paymentService = {
           updated_at = now(),
           gateway = COALESCE($2, gateway)
       WHERE id = $1
-        AND deleted_at IS NULL
       `,
         [payment_id, gateway]
       );
 
-      // 8. Mark order as completed
       await client.query(
         `
       UPDATE orders
@@ -534,7 +495,7 @@ const paymentService = {
       );
 
       if (!isOuterTx) await client.query("COMMIT");
-      return { order_id, payment_id };
+      return { payment_id, order_id };
     } catch (err) {
       if (!isOuterTx) await client.query("ROLLBACK");
       throw err;
@@ -592,18 +553,26 @@ const paymentService = {
    * Cancel all pending payments of an order (set status = INACTIVE)
    * Does NOT touch order.status (order cancel is handled by orderService.cancelOrder).
    */
-  async cancelPendingByOrder(order_id) {
-    const sql = `
-      UPDATE payments
-      SET status = 'INACTIVE',
-          updated_at = now()
-      WHERE order_id = $1
-        AND deleted_at IS NULL
-        AND status = 'PENDING'
-    `;
+  async cancelPayment(payment_id) {
+    const { rowCount } = await db.query(
+      `
+    UPDATE payments
+    SET status = 'INACTIVE',
+        updated_at = now()
+    WHERE id = $1
+      AND deleted_at IS NULL
+      AND status = 'PENDING'
+    `,
+      [payment_id]
+    );
 
-    const { rowCount } = await db.query(sql, [order_id]);
-    return { affectedPayments: rowCount };
+    if (!rowCount) {
+      const e = new Error("No pending payment to cancel");
+      e.status = 400;
+      throw e;
+    }
+
+    return { payment_id, cancelled: true };
   },
 };
 

@@ -252,8 +252,8 @@ const vnpayService = {
       }
 
       // Success: delegate to unified completion logic
-      await paymentService.completeOrderPayment(
-        pay.order_id,
+      await paymentService.completePayment(
+        pay.id,
         { via: "GATEWAY", gateway: "VNPAY" },
         client
       );
@@ -341,20 +341,19 @@ const vnpayService = {
       return;
     }
 
-    // 5. Complete order (same core logic as IPN)
-    const client = await db.getClient();
-    try {
-      await client.query("BEGIN");
-
-      await paymentService.completeOrderPayment(
-        pay.order_id,
-        { via: "RETURN", gateway: "VNPAY" },
-        client
-      );
-
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
+          // 5. Complete order (same core logic as IPN)
+        const client = await db.getClient();
+        try {
+          await client.query("BEGIN");
+    
+          await paymentService.completePayment(
+            pay.id,
+            { via: "RETURN", gateway: "VNPAY" },
+            client
+          );
+    
+          await client.query("COMMIT");
+        } catch (err) {      await client.query("ROLLBACK");
       console.error("[VNPAY RETURN FALLBACK]", err);
     } finally {
       client.release();

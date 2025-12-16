@@ -112,15 +112,18 @@ const paymentController = {
   },
 
   /** Admin complete payment for an order */
-  async markCompletedByOrder(req, res) {
+  async markCompleted(req, res) {
     try {
-      const { order_id } = req.params;
-      validate.uuid(order_id, "order_id");
+      const { payment_id } = req.params;
+      validate.uuid(payment_id, "payment_id");
 
-      const data = await paymentService.completeOrderPayment(order_id);
+      const data = await paymentService.completePayment(payment_id, {
+        via: "COD",
+      });
+
       return R.ok(res, data, "Payment marked as completed");
     } catch (err) {
-      console.error("[paymentController.markCompletedByOrder]", err);
+      console.error("[paymentController.markCompleted]", err);
       return R.internalError(res, err.message);
     }
   },
@@ -147,15 +150,15 @@ const paymentController = {
   },
 
   /** Admin cancel pending payments */
-  async cancelPendingByOrder(req, res) {
+  async cancelPending(req, res) {
     try {
-      const { order_id } = req.params;
-      validate.uuid(order_id, "order_id");
+      const { payment_id } = req.params;
+      validate.uuid(payment_id, "payment_id");
 
-      const data = await paymentService.cancelPendingByOrder(order_id);
-      return R.ok(res, data, "Pending payments cancelled");
+      const data = await paymentService.cancelPayment(payment_id);
+      return R.ok(res, data, "Payment cancelled");
     } catch (err) {
-      console.error("[paymentController.cancelPendingByOrder]", err);
+      console.error("[paymentController.cancelPending]", err);
       return R.internalError(res, err.message);
     }
   },

@@ -24,10 +24,18 @@ const addressService = {
   async list(queryParams = {}) {
     const { page, pageSize, limit, offset } = parsePagination(queryParams);
 
-    const allowedColumns = ["user_id", "full_name", "phone", "postal_code", "is_default"];
+    const allowedColumns = [
+      "user_id",
+      "full_name",
+      "phone",
+      "postal_code",
+      "is_default",
+    ];
     const searchColumns = ["full_name", "phone", "address_line", "postal_code"];
 
-    const filters = Array.isArray(queryParams.filters) ? queryParams.filters : [];
+    const filters = Array.isArray(queryParams.filters)
+      ? queryParams.filters
+      : [];
     const searchText = queryParams.q;
 
     const { user_id, role } = getRequestContext();
@@ -54,8 +62,15 @@ const addressService = {
       alias: "a",
     });
 
-    const softDeleteFilter = buildSoftDeleteScope("a", queryParams.showDeleted || "active");
-    const { whereSql, params } = mergeWhereParts([softDeleteFilter, search, where]);
+    const softDeleteFilter = buildSoftDeleteScope(
+      "a",
+      queryParams.showDeleted || "active"
+    );
+    const { whereSql, params } = mergeWhereParts([
+      softDeleteFilter,
+      search,
+      where,
+    ]);
 
     const orderBy =
       buildOrderBy({
@@ -120,66 +135,92 @@ const addressService = {
    * Create new address (user must be ACTIVE)
    */
   async create(data) {
-    // Validate: user must be ACTIVE
-    const { rows: userRows } = await db.query(
-      `
-      SELECT id 
-      FROM users 
-      WHERE id = $1
-        AND deleted_at IS NULL
-        AND status = 'ACTIVE'
-      `,
-      [data.user_id]
-    );
+    const client = await db.getClient();
+    try {
+      await client.query("BEGIN");
 
-    if (!userRows.length) {
-      const e = new Error("User does not exist or is inactive");
-      e.status = 400;
-      throw e;
-    }
-
-    // -------------------------------
-    // NEW LOGIC: Nếu is_default=true → unset default cũ
-    // -------------------------------
-    if (data.is_default === true) {
-      await db.query(
+      // Validate: user must be ACTIVE
+      const { rows: userRows } = await client.query(
         `
-        UPDATE addresses
-        SET is_default = false, updated_at = now()
-        WHERE user_id = $1 AND deleted_at IS NULL AND is_default = true
-      `,
+        SELECT id 
+        FROM users 
+        WHERE id = $1
+          AND deleted_at IS NULL
+          AND status = 'ACTIVE'
+        `,
         [data.user_id]
       );
+
+      if (!userRows.length) {
+        const e = new Error("User does not exist or is inactive");
+        e.status = 400;
+        throw e;
+      }
+
+      // Check if user currently has ANY default address
+      const { rows: defaultRows } = await client.query(
+        `SELECT 1 FROM addresses WHERE user_id = $1 AND is_default = true AND deleted_at IS NULL LIMIT 1`,
+        [data.user_id]
+      );
+      const hasDefault = defaultRows.length > 0;
+
+      // FORCE DEFAULT if user has no default address yet
+      let isDefault = data.is_default === true;
+      if (!hasDefault) {
+        isDefault = true;
+      }
+
+      // Unset previous defaults if necessary
+      if (isDefault) {
+        await client.query(
+          `
+          UPDATE addresses
+          SET is_default = false, updated_at = now()
+          WHERE user_id = $1 AND deleted_at IS NULL AND is_default = true
+        `,
+          [data.user_id]
+        );
+      }
+
+      const id = uuidv4();
+
+      const sql = `
+        INSERT INTO addresses (
+          id, user_id, full_name, phone, address_line,
+          address_line2, postal_code, is_default
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING id, user_id, full_name, phone, address_line,
+                  address_line2, postal_code, is_default, created_at
+      `;
+
+      const { rows } = await client.query(sql, [
+        id,
+        data.user_id,
+        data.full_name,
+        data.phone,
+        data.address_line,
+        data.address_line2,
+        data.postal_code,
+        isDefault,
+      ]);
+
+      await client.query("COMMIT");
+      return rows[0];
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
-
-    const id = uuidv4();
-
-    const sql = `
-      INSERT INTO addresses (
-        id, user_id, full_name, phone, address_line,
-        address_line2, postal_code, is_default
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      RETURNING id, user_id, full_name, phone, address_line,
-                address_line2, postal_code, is_default, created_at
-    `;
-
-    const { rows } = await db.query(sql, [
-      id,
-      data.user_id,
-      data.full_name,
-      data.phone,
-      data.address_line,
-      data.address_line2,
-      data.postal_code,
-      data.is_default ?? false,
-    ]);
-
-    return rows[0];
   },
 
   /**
-   * Update address (user_id cannot be changed)
+   * Update address information.
+   * - Allow is_default = true
+   * - Disallow is_default = false
+   * - Always update address info first
+   * - If is_default = true → call setDefault AFTER update
    */
   async update(id, data) {
     // Prevent changing owner
@@ -189,17 +230,21 @@ const addressService = {
       throw e;
     }
 
-    // if FE send is_default=true → change to logic setDefault()
-    if ("is_default" in data) {
-      if (data.is_default === true) {
-        return this.setDefault(id);
-      }
-      if (data.is_default === false) {
-        const e = new Error("Cannot unset default manually. Another address must be set as default.");
-        e.status = 400;
-        throw e;
-      }
+    // Disallow manually unsetting default
+    if ("is_default" in data && data.is_default === false) {
+      const e = new Error(
+        "Cannot unset default manually. Another address must be set as default."
+      );
+      e.status = 400;
+      throw e;
     }
+
+    // Determine whether user wants to set this address as default
+    const wantSetDefault = data.is_default === true;
+
+    // Remove is_default from update payload
+    // Default handling is done via setDefault()
+    delete data.is_default;
 
     // Normalize "" => null
     const normalize = (v) => (v === "" ? null : v);
@@ -227,12 +272,19 @@ const addressService = {
       normalize(data.postal_code),
     ]);
 
-    return rows[0] || null;
+    if (!rows.length) return null;
+
+    // If requested, set this address as default
+    if (wantSetDefault) {
+      await this.setDefault(id);
+    }
+
+    return rows[0];
   },
 
   /**
- * Set an address as default for the owner.
- */
+   * Set an address as default for the owner.
+   */
   async setDefault(id) {
     const client = await db.getClient();
 
@@ -274,7 +326,6 @@ const addressService = {
 
       await client.query("COMMIT");
       return updated[0];
-
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

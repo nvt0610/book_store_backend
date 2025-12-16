@@ -11,15 +11,15 @@ const router = express.Router();
 router.use(requireAuth);
 
 // ORDER
-router.post(
-  "/order/:order_id/complete",
+router.patch(
+  "/:payment_id/complete",
   requireRole("ADMIN"),
-  paymentController.markCompletedByOrder
+  paymentController.markCompleted
 );
-router.post(
-  "/order/:order_id/cancel",
+router.patch(
+  "/:payment_id/cancel",
   requireRole("ADMIN"),
-  paymentController.cancelPendingByOrder
+  paymentController.cancelPending
 );
 router.get(
   "/order/:order_id",
